@@ -1,0 +1,2745 @@
+# Irrigation Controller Remote - M5Stack Dial (StampS3)
+# Remote control for the FluxOpenHome Irrigation Controller
+# Communicates via HTTP REST to the controller's web server
+
+substitutions:
+  name: "irrigation-remote"
+  friendly_name: "Irrigation Remote"
+  software_version: "1.0.0"
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  name_add_mac_suffix: true
+  project:
+    name: "FluxOpenHome.IrrigationRemote"
+    version: "${software_version}"
+  platformio_options:
+    board_build.flash_mode: dio
+    board_build.flash_size: 8MB
+  on_boot:
+    priority: -100
+    then:
+      - lambda: |-
+          // Create per-page focus groups for encoder navigation
+          lv_group_t *g_status   = lv_group_create();
+          lv_group_t *g_zones    = lv_group_create();
+          lv_group_t *g_dur      = lv_group_create();
+          lv_group_t *g_sched    = lv_group_create();
+          lv_group_t *g_time_ed  = lv_group_create();
+          lv_group_t *g_settings = lv_group_create();
+          lv_group_t *g_ip_edit  = lv_group_create();
+
+          // page_status
+          lv_group_add_obj(g_status, id(btn_start_stop));
+          lv_group_add_obj(g_status, id(btn_pause));
+          lv_group_add_obj(g_status, id(btn_auto_adv));
+          lv_group_add_obj(g_status, id(btn_goto_zones));
+          lv_group_add_obj(g_status, id(btn_goto_schedule));
+          lv_group_add_obj(g_status, id(btn_goto_settings));
+
+          // page_zones
+          lv_group_add_obj(g_zones, id(btn_zone_1));
+          lv_group_add_obj(g_zones, id(btn_zone_2));
+          lv_group_add_obj(g_zones, id(btn_zone_3));
+          lv_group_add_obj(g_zones, id(btn_zone_4));
+          lv_group_add_obj(g_zones, id(btn_zone_prev));
+          lv_group_add_obj(g_zones, id(btn_zone_next));
+          lv_group_add_obj(g_zones, id(btn_zone_run));
+          lv_group_add_obj(g_zones, id(btn_goto_dur));
+          lv_group_add_obj(g_zones, id(btn_zones_back));
+
+          // page_duration
+          lv_group_add_obj(g_dur, id(btn_dur_zone_prev));
+          lv_group_add_obj(g_dur, id(btn_dur_zone_next));
+          lv_group_add_obj(g_dur, id(slider_duration));
+          lv_group_add_obj(g_dur, id(btn_dur_set));
+          lv_group_add_obj(g_dur, id(btn_dur_back));
+
+          // page_schedule
+          lv_group_add_obj(g_sched, id(btn_sched_toggle));
+          lv_group_add_obj(g_sched, id(btn_day_mon));
+          lv_group_add_obj(g_sched, id(btn_day_tue));
+          lv_group_add_obj(g_sched, id(btn_day_wed));
+          lv_group_add_obj(g_sched, id(btn_day_thu));
+          lv_group_add_obj(g_sched, id(btn_day_fri));
+          lv_group_add_obj(g_sched, id(btn_day_sat));
+          lv_group_add_obj(g_sched, id(btn_day_sun));
+          lv_group_add_obj(g_sched, id(btn_goto_time_edit));
+          lv_group_add_obj(g_sched, id(btn_sched_back));
+
+          // page_time_edit
+          lv_group_add_obj(g_time_ed, id(btn_slot_prev));
+          lv_group_add_obj(g_time_ed, id(btn_slot_next));
+          lv_group_add_obj(g_time_ed, id(slider_hour));
+          lv_group_add_obj(g_time_ed, id(slider_minute));
+          lv_group_add_obj(g_time_ed, id(btn_time_set));
+          lv_group_add_obj(g_time_ed, id(btn_time_clear));
+          lv_group_add_obj(g_time_ed, id(btn_time_back));
+
+          // page_settings
+          lv_group_add_obj(g_settings, id(btn_ip_octet_1));
+          lv_group_add_obj(g_settings, id(btn_ip_octet_2));
+          lv_group_add_obj(g_settings, id(btn_ip_octet_3));
+          lv_group_add_obj(g_settings, id(btn_ip_octet_4));
+          lv_group_add_obj(g_settings, id(slider_zone_count));
+          lv_group_add_obj(g_settings, id(btn_auto_detect));
+          lv_group_add_obj(g_settings, id(btn_settings_save));
+          lv_group_add_obj(g_settings, id(btn_settings_back));
+
+          // page_ip_edit
+          lv_group_add_obj(g_ip_edit, id(slider_ip_val));
+          lv_group_add_obj(g_ip_edit, id(btn_ip_edit_ok));
+          lv_group_add_obj(g_ip_edit, id(btn_ip_edit_cancel));
+
+          // Store group pointers
+          id(grp_status)   = (void*)g_status;
+          id(grp_zones)    = (void*)g_zones;
+          id(grp_duration) = (void*)g_dur;
+          id(grp_schedule) = (void*)g_sched;
+          id(grp_time_edit) = (void*)g_time_ed;
+          id(grp_settings) = (void*)g_settings;
+          id(grp_ip_edit)  = (void*)g_ip_edit;
+
+          // Find encoder indev and assign initial group
+          lv_indev_t *enc = nullptr;
+          while ((enc = lv_indev_get_next(enc)) != nullptr) {
+            if (lv_indev_get_type(enc) == LV_INDEV_TYPE_ENCODER) {
+              id(enc_indev) = (void*)enc;
+              lv_indev_set_group(enc, g_status);
+              break;
+            }
+          }
+      - light.turn_on:
+          id: lcd_backlight
+          brightness: 100%
+      - lvgl.page.show:
+          id: page_splash
+          animation: NONE
+      - delay: 3s
+      - lvgl.page.show:
+          id: page_status
+          animation: NONE
+
+esp32:
+  variant: esp32s3
+  board: esp32-s3-devkitc-1
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE: "y"
+      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL: "y"
+      CONFIG_HTTP_BUF_SIZE: "16384"
+      CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS: "y"
+
+logger:
+  level: DEBUG
+
+api:
+  id: api_server
+
+ota:
+  - id: ota_component
+    platform: esphome
+
+http_request:
+  id: http_req
+  buffer_size_rx: 4096
+  buffer_size_tx: 2048
+  follow_redirects: false
+  timeout: 5s
+  verify_ssl: false
+
+json:
+
+wifi:
+  id: wifi_component
+  ap:
+    ssid: "${name}"
+  on_connect:
+    - lambda: 'id(wifi_connected) = true;'
+    - lvgl.label.update:
+        id: lbl_wifi
+        text: "WiFi: ON"
+        text_color: 0x00E676
+  on_disconnect:
+    - lambda: 'id(wifi_connected) = false;'
+    - lvgl.label.update:
+        id: lbl_wifi
+        text: "WiFi: OFF"
+        text_color: 0xFF1744
+
+captive_portal:
+
+esp32_improv:
+  authorizer: none
+
+improv_serial:
+
+dashboard_import:
+  package_import_url: github://FluxOpenHome/IrrigationControllerRemote/irrigationcontrollerremote.yaml@main
+  import_full_config: true
+
+web_server:
+  port: 80
+
+# ──────────────────────────────────────────────
+# M5Stack Dial (StampS3) Hardware
+# ──────────────────────────────────────────────
+
+i2c:
+  - id: internal_i2c
+    sda: GPIO11
+    scl: GPIO12
+
+spi:
+  - id: spi_bus
+    clk_pin: GPIO6
+    mosi_pin: GPIO5
+
+output:
+  - platform: ledc
+    pin: GPIO9
+    id: lcd_backlight_output
+    channel: 0
+  - platform: ledc
+    pin: GPIO3
+    id: buzzer_output
+    channel: 2
+
+display:
+  - platform: ili9xxx
+    model: GC9A01A
+    cs_pin: GPIO7
+    reset_pin: GPIO8
+    dc_pin: GPIO4
+    id: dial_lcd
+    invert_colors: true
+    auto_clear_enabled: false
+    update_interval: never
+
+touchscreen:
+  - platform: ft5x06
+    id: touch
+    i2c_id: internal_i2c
+    address: 0x38
+
+light:
+  - platform: monochromatic
+    id: lcd_backlight
+    name: "LCD Backlight"
+    icon: "mdi:television"
+    entity_category: config
+    output: lcd_backlight_output
+    restore_mode: RESTORE_DEFAULT_ON
+    default_transition_length: 0s
+
+rtttl:
+  output: buzzer_output
+  id: buzzer
+  gain: 30%
+
+# ──────────────────────────────────────────────
+# Globals
+# ──────────────────────────────────────────────
+
+globals:
+  # Encoder focus groups (per-page)
+  - id: enc_indev
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_status
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_zones
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_duration
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_schedule
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_time_edit
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_settings
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_ip_edit
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+
+  # Connection state
+  - id: wifi_connected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: controller_connected
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: poll_error_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: http_busy
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Controller IP (stored as 4 octets, persists across reboots)
+  - id: ip_octet_1
+    type: int
+    restore_value: yes
+    initial_value: '192'
+  - id: ip_octet_2
+    type: int
+    restore_value: yes
+    initial_value: '168'
+  - id: ip_octet_3
+    type: int
+    restore_value: yes
+    initial_value: '1'
+  - id: ip_octet_4
+    type: int
+    restore_value: yes
+    initial_value: '100'
+  - id: editing_octet
+    type: int
+    restore_value: no
+    initial_value: '1'
+
+  # Zone count (configurable, persists)
+  - id: zone_count
+    type: int
+    restore_value: yes
+    initial_value: '8'
+
+  # Status data from controller
+  - id: ctrl_valve_status
+    type: std::string
+    restore_value: no
+    initial_value: '"Disconnected"'
+  - id: ctrl_time_remaining
+    type: std::string
+    restore_value: no
+    initial_value: '"--"'
+  - id: ctrl_progress
+    type: std::string
+    restore_value: no
+    initial_value: '"--"'
+  - id: ctrl_main_switch_on
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: ctrl_auto_advance_on
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+  # Zone states bitmask (bit N = zone N+1 active)
+  - id: zone_states
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
+  # Zone page navigation
+  - id: zone_page_offset
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: last_selected_zone
+    type: int
+    restore_value: no
+    initial_value: '1'
+
+  # Duration page
+  - id: dur_selected_zone
+    type: int
+    restore_value: no
+    initial_value: '1'
+
+  # Schedule state (cached from controller)
+  - id: sched_enabled
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+  - id: sched_days
+    type: uint8_t
+    restore_value: no
+    initial_value: '0'
+  - id: sched_time_1
+    type: std::string
+    restore_value: no
+    initial_value: '"--:--"'
+  - id: sched_time_2
+    type: std::string
+    restore_value: no
+    initial_value: '"--:--"'
+  - id: sched_time_3
+    type: std::string
+    restore_value: no
+    initial_value: '"--:--"'
+  - id: sched_time_4
+    type: std::string
+    restore_value: no
+    initial_value: '"--:--"'
+
+  # Time editor
+  - id: time_edit_slot
+    type: int
+    restore_value: no
+    initial_value: '1'
+
+  # Zone state poll index (rotating)
+  - id: zone_poll_idx
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+# ──────────────────────────────────────────────
+# Sensors
+# ──────────────────────────────────────────────
+
+sensor:
+  - platform: rotary_encoder
+    id: dial_encoder
+    resolution: 4
+    pin_a:
+      number: GPIO40
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: GPIO41
+      mode:
+        input: true
+        pullup: true
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    id: wifi_signal_sensor
+    update_interval: 60s
+
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+
+binary_sensor:
+  - platform: gpio
+    id: dial_button
+    pin:
+      number: GPIO42
+      mode:
+        input: true
+        pullup: true
+      inverted: true
+
+# ──────────────────────────────────────────────
+# Scripts
+# ──────────────────────────────────────────────
+
+script:
+  # --- Status polling (runs every 5s) ---
+  - id: poll_status
+    then:
+      - lambda: |-
+          if (!id(wifi_connected) || id(http_busy)) return;
+          id(http_busy) = true;
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Status",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 512
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    id(poll_error_count) = 0;
+                    id(controller_connected) = true;
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        id(ctrl_valve_status) = root["state"].as<std::string>();
+                      }
+                      return true;
+                    });
+                    lv_label_set_text(id(lbl_valve_status), id(ctrl_valve_status).c_str());
+                    std::string s = id(ctrl_valve_status);
+                    if (s.find("Active") != std::string::npos) {
+                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
+                    } else if (s == "Idle" || s == "System Ready") {
+                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x00E676), 0);
+                    } else if (s.find("Rain") != std::string::npos) {
+                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
+                    } else if (s == "Paused") {
+                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFAB00), 0);
+                    } else {
+                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFFFFF), 0);
+                    }
+                    lv_label_set_text(id(lbl_connection), "Connected");
+                    lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0x00E676), 0);
+                  } else {
+                    id(poll_error_count)++;
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Time%%20Remaining",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        id(ctrl_time_remaining) = root["state"].as<std::string>();
+                      }
+                      return true;
+                    });
+                    char buf[24];
+                    snprintf(buf, sizeof(buf), "Time: %s", id(ctrl_time_remaining).c_str());
+                    lv_label_set_text(id(lbl_time_remaining), buf);
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Progress",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        id(ctrl_progress) = root["state"].as<std::string>();
+                      }
+                      return true;
+                    });
+                    lv_label_set_text(id(lbl_progress), id(ctrl_progress).c_str());
+                    int pct = atoi(id(ctrl_progress).c_str());
+                    lv_bar_set_value(id(bar_progress), pct, LV_ANIM_ON);
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        id(ctrl_main_switch_on) = root["value"].as<bool>();
+                      }
+                      return true;
+                    });
+                    if (id(ctrl_main_switch_on)) {
+                      lv_label_set_text(id(lbl_start_stop), "STOP");
+                      lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0xFF3D00), 0);
+                    } else {
+                      lv_label_set_text(id(lbl_start_stop), "START");
+                      lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0x00E676), 0);
+                    }
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        id(ctrl_auto_advance_on) = root["value"].as<bool>();
+                      }
+                      return true;
+                    });
+                    if (id(ctrl_auto_advance_on)) {
+                      lv_label_set_text(id(lbl_auto_adv), "AUTO: ON");
+                    } else {
+                      lv_label_set_text(id(lbl_auto_adv), "AUTO: OFF");
+                    }
+                  }
+      - lambda: |-
+          id(http_busy) = false;
+          if (id(poll_error_count) >= 3) {
+            id(controller_connected) = false;
+            lv_label_set_text(id(lbl_connection), "Disconnected");
+            lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0xFF1744), 0);
+            lv_label_set_text(id(lbl_valve_status), "Disconnected");
+            lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFF1744), 0);
+          }
+
+  # --- Zone state polling (rotating, 2 zones per tick) ---
+  - id: poll_zone_states
+    then:
+      - lambda: |-
+          if (!id(wifi_connected) || id(http_busy) || !id(controller_connected)) return;
+          // We poll zones one at a time via sequential calls below
+          // Store the current index to poll
+          int zc = id(zone_count);
+          if (zc <= 0) return;
+          id(zone_poll_idx) = id(zone_poll_idx) % zc;
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            int zone = id(zone_poll_idx) + 1;
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone);
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    int zone = id(zone_poll_idx);
+                    json::parse_json(body, [zone](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        bool on = root["value"].as<bool>();
+                        if (on) {
+                          id(zone_states) |= (1u << zone);
+                        } else {
+                          id(zone_states) &= ~(1u << zone);
+                        }
+                      }
+                      return true;
+                    });
+                  }
+      - lambda: |-
+          id(zone_poll_idx) = (id(zone_poll_idx) + 1) % id(zone_count);
+
+  # --- Schedule polling (runs every 30s) ---
+  - id: poll_schedule
+    then:
+      - lambda: |-
+          if (!id(wifi_connected) || id(http_busy) || !id(controller_connected)) return;
+          id(http_busy) = true;
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        id(sched_enabled) = root["value"].as<bool>();
+                      }
+                      return true;
+                    });
+                  }
+      # Poll day switches - Monday through Sunday
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Monday",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 0);
+                        else id(sched_days) &= ~(1 << 0);
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Tuesday",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 1);
+                        else id(sched_days) &= ~(1 << 1);
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Wednesday",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 2);
+                        else id(sched_days) &= ~(1 << 2);
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Thursday",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 3);
+                        else id(sched_days) &= ~(1 << 3);
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Friday",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 4);
+                        else id(sched_days) &= ~(1 << 4);
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Saturday",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 5);
+                        else id(sched_days) &= ~(1 << 5);
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Sunday",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("value")) {
+                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 6);
+                        else id(sched_days) &= ~(1 << 6);
+                      }
+                      return true;
+                    });
+                  }
+      # Poll start times
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%201",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        std::string val = root["state"].as<std::string>();
+                        id(sched_time_1) = val.empty() ? "--:--" : val;
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%202",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        std::string val = root["state"].as<std::string>();
+                        id(sched_time_2) = val.empty() ? "--:--" : val;
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%203",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        std::string val = root["state"].as<std::string>();
+                        id(sched_time_3) = val.empty() ? "--:--" : val;
+                      }
+                      return true;
+                    });
+                  }
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%204",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        std::string val = root["state"].as<std::string>();
+                        id(sched_time_4) = val.empty() ? "--:--" : val;
+                      }
+                      return true;
+                    });
+                  }
+      - lambda: 'id(http_busy) = false;'
+
+  # --- Command scripts ---
+  - id: send_main_toggle
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume/toggle",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+
+  - id: send_pause
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/button/Pause/press",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+
+  - id: send_auto_advance_toggle
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance/toggle",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+
+  - id: send_zone_on
+    parameters:
+      zone_num: int
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_on",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
+            return std::string(url);
+
+  - id: send_zone_off
+    parameters:
+      zone_num: int
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_off",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
+            return std::string(url);
+
+  - id: send_zone_toggle
+    parameters:
+      zone_num: int
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/toggle",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
+            return std::string(url);
+
+  - id: send_duration_set
+    parameters:
+      zone_num: int
+      duration_val: int
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/number/Zone%%20%d%%20Duration/set?value=%d",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num, duration_val);
+            return std::string(url);
+
+  - id: send_schedule_toggle
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled/toggle",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+
+  - id: send_day_toggle
+    parameters:
+      day_name: string
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20%s/toggle",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), day_name.c_str());
+            return std::string(url);
+
+  - id: send_schedule_time
+    parameters:
+      slot: int
+      time_str: string
+    then:
+      - http_request.post:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%20%d/set?value=%s",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), slot, time_str.c_str());
+            return std::string(url);
+
+  - id: auto_detect_zones
+    then:
+      - http_request.get:
+          url: !lambda |-
+            char url[128];
+            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Detected%%20Zones",
+                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+            return std::string(url);
+          capture_response: true
+          max_response_buffer_size: 256
+          on_response:
+            then:
+              - lambda: |-
+                  if (response->status_code == 200) {
+                    json::parse_json(body, [](JsonObject root) -> bool {
+                      if (root.containsKey("state")) {
+                        std::string s = root["state"].as<std::string>();
+                        // Parse "8 zones (no expansion boards)" or "16 zones (0x20)"
+                        int n = atoi(s.c_str());
+                        if (n >= 1 && n <= 32) {
+                          id(zone_count) = n;
+                          lv_slider_set_value(id(slider_zone_count), n, LV_ANIM_ON);
+                          char buf[4];
+                          snprintf(buf, sizeof(buf), "%d", n);
+                          lv_label_set_text(id(lbl_zone_count_val), buf);
+                        }
+                      }
+                      return true;
+                    });
+                  }
+
+  # --- Helper: refresh zone page buttons ---
+  - id: refresh_zone_buttons
+    then:
+      - lambda: |-
+          int offset = id(zone_page_offset);
+          int zc = id(zone_count);
+          lv_obj_t *btns[] = {id(btn_zone_1), id(btn_zone_2), id(btn_zone_3), id(btn_zone_4)};
+          lv_obj_t *lbls[] = {id(lbl_zone_1), id(lbl_zone_2), id(lbl_zone_3), id(lbl_zone_4)};
+          for (int i = 0; i < 4; i++) {
+            int zone_num = offset + i + 1;
+            if (zone_num <= zc) {
+              lv_obj_clear_flag(btns[i], LV_OBJ_FLAG_HIDDEN);
+              char buf[12];
+              snprintf(buf, sizeof(buf), "Zone %d", zone_num);
+              lv_label_set_text(lbls[i], buf);
+              bool active = (id(zone_states) >> (zone_num - 1)) & 1;
+              if (active) {
+                lv_obj_set_style_bg_color(btns[i], lv_color_hex(0x2979FF), 0);
+                lv_obj_set_style_text_color(lbls[i], lv_color_hex(0xFFFFFF), 0);
+              } else {
+                lv_obj_set_style_bg_color(btns[i], lv_color_hex(0x1A1A1A), 0);
+                lv_obj_set_style_border_color(btns[i], lv_color_hex(0x00E676), 0);
+                lv_obj_set_style_text_color(lbls[i], lv_color_hex(0x00E676), 0);
+              }
+            } else {
+              lv_obj_add_flag(btns[i], LV_OBJ_FLAG_HIDDEN);
+            }
+          }
+          char title[16];
+          int last = offset + 4;
+          if (last > zc) last = zc;
+          snprintf(title, sizeof(title), "ZONES %d-%d", offset + 1, last);
+          lv_label_set_text(id(lbl_zone_page_title), title);
+
+  # --- Helper: refresh schedule page ---
+  - id: refresh_schedule_page
+    then:
+      - lambda: |-
+          // Update enabled label
+          if (id(sched_enabled)) {
+            lv_label_set_text(id(lbl_sched_enabled), "ON");
+            lv_obj_set_style_text_color(id(lbl_sched_enabled), lv_color_hex(0x00E676), 0);
+          } else {
+            lv_label_set_text(id(lbl_sched_enabled), "OFF");
+            lv_obj_set_style_text_color(id(lbl_sched_enabled), lv_color_hex(0xFF3D00), 0);
+          }
+          // Update day buttons
+          const char* day_labels[] = {"M", "T", "W", "T", "F", "S", "S"};
+          lv_obj_t* day_btns[] = {id(btn_day_mon), id(btn_day_tue), id(btn_day_wed),
+                                   id(btn_day_thu), id(btn_day_fri), id(btn_day_sat), id(btn_day_sun)};
+          for (int i = 0; i < 7; i++) {
+            bool on = (id(sched_days) >> i) & 1;
+            if (on) {
+              lv_obj_set_style_bg_color(day_btns[i], lv_color_hex(0x00E676), 0);
+            } else {
+              lv_obj_set_style_bg_color(day_btns[i], lv_color_hex(0x333333), 0);
+            }
+          }
+          // Update time labels
+          char buf[32];
+          snprintf(buf, sizeof(buf), "1: %s", id(sched_time_1).c_str());
+          lv_label_set_text(id(lbl_sched_t1), buf);
+          snprintf(buf, sizeof(buf), "2: %s", id(sched_time_2).c_str());
+          lv_label_set_text(id(lbl_sched_t2), buf);
+          snprintf(buf, sizeof(buf), "3: %s", id(sched_time_3).c_str());
+          lv_label_set_text(id(lbl_sched_t3), buf);
+          snprintf(buf, sizeof(buf), "4: %s", id(sched_time_4).c_str());
+          lv_label_set_text(id(lbl_sched_t4), buf);
+
+# ──────────────────────────────────────────────
+# Intervals
+# ──────────────────────────────────────────────
+
+interval:
+  - interval: 5s
+    then:
+      - script.execute: poll_status
+
+  - interval: 15s
+    then:
+      - script.execute: poll_zone_states
+
+  - interval: 30s
+    then:
+      - script.execute: poll_schedule
+
+# ──────────────────────────────────────────────
+# LVGL UI
+# ──────────────────────────────────────────────
+
+lvgl:
+  displays:
+    - dial_lcd
+  touchscreens:
+    - touchscreen_id: touch
+  encoders:
+    - sensor: dial_encoder
+      enter_button: dial_button
+  color_depth: 16
+  buffer_size: 10%
+  default_font: montserrat_14
+  disp_bg_color: 0x0D0D0D
+
+  theme:
+    button:
+      focused:
+        border_color: 0xFFFFFF
+        border_width: 2
+    slider:
+      focused:
+        border_color: 0xFFFFFF
+        border_width: 2
+      knob:
+        edited:
+          bg_color: 0xFF3D00
+
+  style_definitions:
+    - id: style_btn
+      bg_color: 0x00E676
+      radius: 8
+      text_color: 0x0D0D0D
+      pad_all: 6
+    - id: style_btn_outline
+      bg_color: 0x1A1A1A
+      radius: 8
+      border_width: 2
+      border_color: 0x00E676
+      text_color: 0x00E676
+      pad_all: 6
+    - id: style_btn_red
+      bg_color: 0xFF3D00
+      radius: 8
+      text_color: 0xFFFFFF
+      pad_all: 6
+
+  pages:
+    # ──────── PAGE: SPLASH ────────
+    - id: page_splash
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      widgets:
+        - label:
+            text: "IRRIGATION"
+            text_font: montserrat_28
+            text_color: 0x00E676
+            align: CENTER
+            y: -20
+        - label:
+            text: "REMOTE"
+            text_font: montserrat_14
+            text_color: 0x888888
+            align: CENTER
+            y: 10
+        - label:
+            id: lbl_splash_status
+            text: "Connecting..."
+            text_font: montserrat_12
+            text_color: 0x555555
+            align: CENTER
+            y: 35
+
+    # ──────── PAGE: STATUS (Main Dashboard) ────────
+    - id: page_status
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_status));
+      widgets:
+        - label:
+            text: "IRRIGATION"
+            text_font: montserrat_12
+            text_color: 0x888888
+            align: TOP_MID
+            y: 18
+
+        - label:
+            id: lbl_connection
+            text: "Disconnected"
+            text_font: montserrat_10
+            text_color: 0xFF1744
+            align: TOP_MID
+            y: 34
+
+        - label:
+            id: lbl_valve_status
+            text: "Idle"
+            text_font: montserrat_14
+            text_color: 0x00E676
+            align: TOP_MID
+            y: 52
+
+        - label:
+            id: lbl_time_remaining
+            text: "Time: --"
+            text_font: montserrat_12
+            text_color: 0xFFFFFF
+            x: 40
+            y: 74
+
+        - label:
+            id: lbl_progress
+            text: "0%"
+            text_font: montserrat_12
+            text_color: 0xFFFFFF
+            align: TOP_RIGHT
+            x: -40
+            y: 74
+
+        - bar:
+            id: bar_progress
+            align: TOP_MID
+            y: 92
+            width: 160
+            height: 8
+            min_value: 0
+            max_value: 100
+            value: 0
+            bg_color: 0x1A1A1A
+            indicator:
+              bg_color: 0x00E676
+
+        # Row 1: START/STOP + PAUSE
+        - button:
+            id: btn_start_stop
+            x: 30
+            y: 108
+            width: 88
+            height: 28
+            styles: style_btn
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  id: lbl_start_stop
+                  text: "START"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - script.execute: send_main_toggle
+
+        - button:
+            id: btn_pause
+            x: 124
+            y: 108
+            width: 88
+            height: 28
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "PAUSE"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - script.execute: send_pause
+
+        # Row 2: AUTO ADV + ZONES
+        - button:
+            id: btn_auto_adv
+            x: 30
+            y: 142
+            width: 88
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  id: lbl_auto_adv
+                  text: "AUTO: OFF"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - script.execute: send_auto_advance_toggle
+
+        - button:
+            id: btn_goto_zones
+            x: 124
+            y: 142
+            width: 88
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "ZONES >"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_zones
+                    animation: NONE
+
+        # Row 3: SCHEDULE + SETTINGS
+        - button:
+            id: btn_goto_schedule
+            x: 30
+            y: 174
+            width: 88
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "SCHED >"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_schedule
+                    animation: NONE
+
+        - button:
+            id: btn_goto_settings
+            x: 124
+            y: 174
+            width: 88
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "SETUP >"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_settings
+                    animation: NONE
+
+        - label:
+            id: lbl_wifi
+            text: "WiFi: --"
+            text_font: montserrat_10
+            text_color: 0x444444
+            align: BOTTOM_MID
+            y: -6
+
+    # ──────── PAGE: ZONES ────────
+    - id: page_zones
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_zones));
+          - script.execute: refresh_zone_buttons
+      widgets:
+        - label:
+            id: lbl_zone_page_title
+            text: "ZONES 1-4"
+            text_font: montserrat_12
+            text_color: 0x888888
+            align: TOP_MID
+            y: 18
+
+        # 2x2 grid of zone buttons
+        - button:
+            id: btn_zone_1
+            x: 24
+            y: 38
+            width: 92
+            height: 34
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 1;'
+            widgets:
+              - label:
+                  id: lbl_zone_1
+                  text: "Zone 1"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 1;'
+                - script.execute:
+                    id: send_zone_toggle
+                    zone_num: !lambda 'return id(zone_page_offset) + 1;'
+
+        - button:
+            id: btn_zone_2
+            x: 124
+            y: 38
+            width: 92
+            height: 34
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 2;'
+            widgets:
+              - label:
+                  id: lbl_zone_2
+                  text: "Zone 2"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 2;'
+                - script.execute:
+                    id: send_zone_toggle
+                    zone_num: !lambda 'return id(zone_page_offset) + 2;'
+
+        - button:
+            id: btn_zone_3
+            x: 24
+            y: 80
+            width: 92
+            height: 34
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 3;'
+            widgets:
+              - label:
+                  id: lbl_zone_3
+                  text: "Zone 3"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 3;'
+                - script.execute:
+                    id: send_zone_toggle
+                    zone_num: !lambda 'return id(zone_page_offset) + 3;'
+
+        - button:
+            id: btn_zone_4
+            x: 124
+            y: 80
+            width: 92
+            height: 34
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 4;'
+            widgets:
+              - label:
+                  id: lbl_zone_4
+                  text: "Zone 4"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 4;'
+                - script.execute:
+                    id: send_zone_toggle
+                    zone_num: !lambda 'return id(zone_page_offset) + 4;'
+
+        # Nav: PREV / NEXT
+        - button:
+            id: btn_zone_prev
+            x: 30
+            y: 122
+            width: 80
+            height: 24
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "< PREV"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    if (id(zone_page_offset) >= 4)
+                      id(zone_page_offset) -= 4;
+                - script.execute: refresh_zone_buttons
+
+        - button:
+            id: btn_zone_next
+            x: 130
+            y: 122
+            width: 80
+            height: 24
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "NEXT >"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    if (id(zone_page_offset) + 4 < id(zone_count))
+                      id(zone_page_offset) += 4;
+                - script.execute: refresh_zone_buttons
+
+        # Bottom row: BACK / RUN NOW / TIMER
+        - button:
+            id: btn_zones_back
+            x: 18
+            y: 154
+            width: 60
+            height: 24
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "BACK"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_status
+                    animation: NONE
+
+        - button:
+            id: btn_zone_run
+            x: 86
+            y: 154
+            width: 68
+            height: 24
+            styles: style_btn
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "RUN"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - script.execute:
+                    id: send_zone_on
+                    zone_num: !lambda 'return id(last_selected_zone);'
+
+        - button:
+            id: btn_goto_dur
+            x: 162
+            y: 154
+            width: 60
+            height: 24
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "TIMER"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_duration
+                    animation: NONE
+
+    # ──────── PAGE: DURATION ────────
+    - id: page_duration
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_duration));
+              char buf[16];
+              snprintf(buf, sizeof(buf), "Zone %d", id(dur_selected_zone));
+              lv_label_set_text(id(lbl_dur_zone_name), buf);
+      widgets:
+        - label:
+            text: "ZONE DURATION"
+            text_font: montserrat_12
+            text_color: 0x888888
+            align: TOP_MID
+            y: 22
+
+        - button:
+            id: btn_dur_zone_prev
+            x: 30
+            y: 44
+            width: 40
+            height: 28
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "<"
+                  text_font: montserrat_14
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    if (id(dur_selected_zone) > 1) {
+                      id(dur_selected_zone)--;
+                      char buf[16];
+                      snprintf(buf, sizeof(buf), "Zone %d", id(dur_selected_zone));
+                      lv_label_set_text(id(lbl_dur_zone_name), buf);
+                    }
+
+        - label:
+            id: lbl_dur_zone_name
+            text: "Zone 1"
+            text_font: montserrat_14
+            text_color: 0x00E676
+            align: TOP_MID
+            y: 48
+
+        - button:
+            id: btn_dur_zone_next
+            x: 170
+            y: 44
+            width: 40
+            height: 28
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: ">"
+                  text_font: montserrat_14
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    if (id(dur_selected_zone) < id(zone_count)) {
+                      id(dur_selected_zone)++;
+                      char buf[16];
+                      snprintf(buf, sizeof(buf), "Zone %d", id(dur_selected_zone));
+                      lv_label_set_text(id(lbl_dur_zone_name), buf);
+                    }
+
+        - label:
+            id: lbl_dur_value
+            text: "2 min"
+            text_font: montserrat_28
+            text_color: 0xFFFFFF
+            align: CENTER
+            y: -16
+
+        - slider:
+            id: slider_duration
+            align: CENTER
+            y: 20
+            width: 160
+            height: 14
+            min_value: 1
+            max_value: 60
+            value: 2
+            bg_color: 0x1A1A1A
+            indicator:
+              bg_color: 0x00E676
+            knob:
+              bg_color: 0xFFFFFF
+              radius: 7
+              width: 14
+              height: 14
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            on_value:
+              then:
+                - lvgl.label.update:
+                    id: lbl_dur_value
+                    text:
+                      format: "%d min"
+                      args: ['(int)x']
+
+        - button:
+            id: btn_dur_set
+            align: CENTER
+            y: 54
+            width: 120
+            height: 30
+            styles: style_btn
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "SET"
+                  text_font: montserrat_14
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - script.execute:
+                    id: send_duration_set
+                    zone_num: !lambda 'return id(dur_selected_zone);'
+                    duration_val: !lambda 'return lv_slider_get_value(id(slider_duration));'
+                - rtttl.play: "c:d=16,o=5,b=200:c,e"
+
+        - button:
+            id: btn_dur_back
+            align: BOTTOM_MID
+            y: -28
+            width: 80
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "< BACK"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_zones
+                    animation: NONE
+
+    # ──────── PAGE: SCHEDULE ────────
+    - id: page_schedule
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_schedule));
+          - script.execute: refresh_schedule_page
+      widgets:
+        - label:
+            text: "SCHEDULE"
+            text_font: montserrat_12
+            text_color: 0x888888
+            align: TOP_MID
+            y: 18
+
+        # Enable toggle
+        - button:
+            id: btn_sched_toggle
+            x: 40
+            y: 36
+            width: 100
+            height: 24
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "Enabled:"
+                  text_font: montserrat_10
+                  align: LEFT_MID
+                  x: 4
+                  text_color: 0x888888
+              - label:
+                  id: lbl_sched_enabled
+                  text: "OFF"
+                  text_font: montserrat_10
+                  align: RIGHT_MID
+                  x: -4
+                  text_color: 0xFF3D00
+            on_click:
+              then:
+                - script.execute: send_schedule_toggle
+                - lambda: |-
+                    id(sched_enabled) = !id(sched_enabled);
+                - script.execute: refresh_schedule_page
+
+        # Day of week buttons (7 in a row)
+        - button:
+            id: btn_day_mon
+            x: 22
+            y: 66
+            width: 26
+            height: 24
+            radius: 4
+            bg_color: 0x333333
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "M"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - script.execute:
+                    id: send_day_toggle
+                    day_name: "Monday"
+                - lambda: 'id(sched_days) ^= (1 << 0);'
+                - script.execute: refresh_schedule_page
+
+        - button:
+            id: btn_day_tue
+            x: 52
+            y: 66
+            width: 26
+            height: 24
+            radius: 4
+            bg_color: 0x333333
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "T"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - script.execute:
+                    id: send_day_toggle
+                    day_name: "Tuesday"
+                - lambda: 'id(sched_days) ^= (1 << 1);'
+                - script.execute: refresh_schedule_page
+
+        - button:
+            id: btn_day_wed
+            x: 82
+            y: 66
+            width: 26
+            height: 24
+            radius: 4
+            bg_color: 0x333333
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "W"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - script.execute:
+                    id: send_day_toggle
+                    day_name: "Wednesday"
+                - lambda: 'id(sched_days) ^= (1 << 2);'
+                - script.execute: refresh_schedule_page
+
+        - button:
+            id: btn_day_thu
+            x: 112
+            y: 66
+            width: 26
+            height: 24
+            radius: 4
+            bg_color: 0x333333
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "T"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - script.execute:
+                    id: send_day_toggle
+                    day_name: "Thursday"
+                - lambda: 'id(sched_days) ^= (1 << 3);'
+                - script.execute: refresh_schedule_page
+
+        - button:
+            id: btn_day_fri
+            x: 142
+            y: 66
+            width: 26
+            height: 24
+            radius: 4
+            bg_color: 0x333333
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "F"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - script.execute:
+                    id: send_day_toggle
+                    day_name: "Friday"
+                - lambda: 'id(sched_days) ^= (1 << 4);'
+                - script.execute: refresh_schedule_page
+
+        - button:
+            id: btn_day_sat
+            x: 172
+            y: 66
+            width: 26
+            height: 24
+            radius: 4
+            bg_color: 0x333333
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "S"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - script.execute:
+                    id: send_day_toggle
+                    day_name: "Saturday"
+                - lambda: 'id(sched_days) ^= (1 << 5);'
+                - script.execute: refresh_schedule_page
+
+        - button:
+            id: btn_day_sun
+            x: 202
+            y: 66
+            width: 26
+            height: 24
+            radius: 4
+            bg_color: 0x333333
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "S"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - script.execute:
+                    id: send_day_toggle
+                    day_name: "Sunday"
+                - lambda: 'id(sched_days) ^= (1 << 6);'
+                - script.execute: refresh_schedule_page
+
+        # Start time displays (2x2)
+        - label:
+            id: lbl_sched_t1
+            text: "1: --:--"
+            text_font: montserrat_12
+            text_color: 0xFFFFFF
+            x: 30
+            y: 98
+        - label:
+            id: lbl_sched_t2
+            text: "2: --:--"
+            text_font: montserrat_12
+            text_color: 0xFFFFFF
+            x: 130
+            y: 98
+        - label:
+            id: lbl_sched_t3
+            text: "3: --:--"
+            text_font: montserrat_12
+            text_color: 0x888888
+            x: 30
+            y: 118
+        - label:
+            id: lbl_sched_t4
+            text: "4: --:--"
+            text_font: montserrat_12
+            text_color: 0x888888
+            x: 130
+            y: 118
+
+        # Bottom row
+        - button:
+            id: btn_goto_time_edit
+            x: 30
+            y: 146
+            width: 100
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "EDIT TIMES"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_time_edit
+                    animation: NONE
+
+        - button:
+            id: btn_sched_back
+            x: 140
+            y: 146
+            width: 80
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "< BACK"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_status
+                    animation: NONE
+
+    # ──────── PAGE: TIME EDITOR ────────
+    - id: page_time_edit
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_time_edit));
+              char buf[24];
+              snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
+              lv_label_set_text(id(lbl_time_edit_title), buf);
+      widgets:
+        - label:
+            id: lbl_time_edit_title
+            text: "START TIME 1"
+            text_font: montserrat_12
+            text_color: 0x888888
+            align: TOP_MID
+            y: 22
+
+        # Slot selector
+        - button:
+            id: btn_slot_prev
+            x: 40
+            y: 40
+            width: 40
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "<"
+                  text_font: montserrat_14
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    if (id(time_edit_slot) > 1) {
+                      id(time_edit_slot)--;
+                      char buf[24];
+                      snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
+                      lv_label_set_text(id(lbl_time_edit_title), buf);
+                    }
+
+        - label:
+            id: lbl_time_edit_slot
+            text: "Slot 1"
+            text_font: montserrat_14
+            text_color: 0x00E676
+            align: TOP_MID
+            y: 44
+
+        - button:
+            id: btn_slot_next
+            x: 160
+            y: 40
+            width: 40
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: ">"
+                  text_font: montserrat_14
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    if (id(time_edit_slot) < 4) {
+                      id(time_edit_slot)++;
+                      char buf[24];
+                      snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
+                      lv_label_set_text(id(lbl_time_edit_title), buf);
+                    }
+
+        # Time display
+        - label:
+            id: lbl_time_display
+            text: "06:00"
+            text_font: montserrat_28
+            text_color: 0xFFFFFF
+            align: CENTER
+            y: -22
+
+        # Hour slider
+        - label:
+            text: "Hr"
+            text_font: montserrat_10
+            text_color: 0x888888
+            x: 24
+            y: 108
+        - slider:
+            id: slider_hour
+            x: 46
+            y: 108
+            width: 140
+            height: 12
+            min_value: 0
+            max_value: 23
+            value: 6
+            bg_color: 0x1A1A1A
+            indicator:
+              bg_color: 0x00E676
+            knob:
+              bg_color: 0xFFFFFF
+              radius: 6
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            on_value:
+              then:
+                - lambda: |-
+                    int h = lv_slider_get_value(id(slider_hour));
+                    int m = lv_slider_get_value(id(slider_minute));
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+                    lv_label_set_text(id(lbl_time_display), buf);
+        - label:
+            id: lbl_hour_val
+            text: "6"
+            text_font: montserrat_10
+            text_color: 0x00E676
+            x: 194
+            y: 108
+
+        # Minute slider
+        - label:
+            text: "Mn"
+            text_font: montserrat_10
+            text_color: 0x888888
+            x: 24
+            y: 128
+        - slider:
+            id: slider_minute
+            x: 46
+            y: 128
+            width: 140
+            height: 12
+            min_value: 0
+            max_value: 59
+            value: 0
+            bg_color: 0x1A1A1A
+            indicator:
+              bg_color: 0x00E676
+            knob:
+              bg_color: 0xFFFFFF
+              radius: 6
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            on_value:
+              then:
+                - lambda: |-
+                    int h = lv_slider_get_value(id(slider_hour));
+                    int m = lv_slider_get_value(id(slider_minute));
+                    char buf[8];
+                    snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+                    lv_label_set_text(id(lbl_time_display), buf);
+        - label:
+            id: lbl_min_val
+            text: "0"
+            text_font: montserrat_10
+            text_color: 0x00E676
+            x: 194
+            y: 128
+
+        # Bottom buttons: SET / CLEAR / BACK
+        - button:
+            id: btn_time_set
+            x: 18
+            y: 154
+            width: 64
+            height: 26
+            styles: style_btn
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "SET"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - lambda: |-
+                    int h = lv_slider_get_value(id(slider_hour));
+                    int m = lv_slider_get_value(id(slider_minute));
+                    char time_buf[8];
+                    snprintf(time_buf, sizeof(time_buf), "%02d:%02d", h, m);
+                    // Store locally
+                    std::string ts = time_buf;
+                    int slot = id(time_edit_slot);
+                    if (slot == 1) id(sched_time_1) = ts;
+                    else if (slot == 2) id(sched_time_2) = ts;
+                    else if (slot == 3) id(sched_time_3) = ts;
+                    else if (slot == 4) id(sched_time_4) = ts;
+                - script.execute:
+                    id: send_schedule_time
+                    slot: !lambda 'return id(time_edit_slot);'
+                    time_str: !lambda |-
+                      int h = lv_slider_get_value(id(slider_hour));
+                      int m = lv_slider_get_value(id(slider_minute));
+                      char buf[8];
+                      snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+                      return std::string(buf);
+                - rtttl.play: "c:d=16,o=5,b=200:c,e"
+
+        - button:
+            id: btn_time_clear
+            x: 88
+            y: 154
+            width: 64
+            height: 26
+            styles: style_btn_red
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "CLEAR"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - lambda: |-
+                    int slot = id(time_edit_slot);
+                    if (slot == 1) id(sched_time_1) = "--:--";
+                    else if (slot == 2) id(sched_time_2) = "--:--";
+                    else if (slot == 3) id(sched_time_3) = "--:--";
+                    else if (slot == 4) id(sched_time_4) = "--:--";
+                - script.execute:
+                    id: send_schedule_time
+                    slot: !lambda 'return id(time_edit_slot);'
+                    time_str: ""
+
+        - button:
+            id: btn_time_back
+            x: 158
+            y: 154
+            width: 64
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "BACK"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_schedule
+                    animation: NONE
+
+    # ──────── PAGE: SETTINGS ────────
+    - id: page_settings
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_settings));
+              // Update IP display
+              char o1[4], o2[4], o3[4], o4[4];
+              snprintf(o1, sizeof(o1), "%d", id(ip_octet_1));
+              snprintf(o2, sizeof(o2), "%d", id(ip_octet_2));
+              snprintf(o3, sizeof(o3), "%d", id(ip_octet_3));
+              snprintf(o4, sizeof(o4), "%d", id(ip_octet_4));
+              lv_label_set_text(id(lbl_ip_o1), o1);
+              lv_label_set_text(id(lbl_ip_o2), o2);
+              lv_label_set_text(id(lbl_ip_o3), o3);
+              lv_label_set_text(id(lbl_ip_o4), o4);
+              lv_slider_set_value(id(slider_zone_count), id(zone_count), LV_ANIM_OFF);
+              char zc[4];
+              snprintf(zc, sizeof(zc), "%d", id(zone_count));
+              lv_label_set_text(id(lbl_zone_count_val), zc);
+      widgets:
+        - label:
+            text: "SETTINGS"
+            text_font: montserrat_12
+            text_color: 0x888888
+            align: TOP_MID
+            y: 18
+
+        - label:
+            text: "Controller IP:"
+            text_font: montserrat_10
+            text_color: 0x888888
+            align: TOP_MID
+            y: 36
+
+        # IP octet buttons
+        - button:
+            id: btn_ip_octet_1
+            x: 18
+            y: 52
+            width: 48
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  id: lbl_ip_o1
+                  text: "192"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    id(editing_octet) = 1;
+                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_1), LV_ANIM_OFF);
+                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 1");
+                    char buf[4];
+                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_1));
+                    lv_label_set_text(id(lbl_ip_edit_val), buf);
+                - lvgl.page.show:
+                    id: page_ip_edit
+                    animation: NONE
+
+        - label:
+            text: "."
+            text_font: montserrat_14
+            text_color: 0x888888
+            x: 69
+            y: 56
+
+        - button:
+            id: btn_ip_octet_2
+            x: 74
+            y: 52
+            width: 48
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  id: lbl_ip_o2
+                  text: "168"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    id(editing_octet) = 2;
+                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_2), LV_ANIM_OFF);
+                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 2");
+                    char buf[4];
+                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_2));
+                    lv_label_set_text(id(lbl_ip_edit_val), buf);
+                - lvgl.page.show:
+                    id: page_ip_edit
+                    animation: NONE
+
+        - label:
+            text: "."
+            text_font: montserrat_14
+            text_color: 0x888888
+            x: 125
+            y: 56
+
+        - button:
+            id: btn_ip_octet_3
+            x: 130
+            y: 52
+            width: 42
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  id: lbl_ip_o3
+                  text: "1"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    id(editing_octet) = 3;
+                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_3), LV_ANIM_OFF);
+                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 3");
+                    char buf[4];
+                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_3));
+                    lv_label_set_text(id(lbl_ip_edit_val), buf);
+                - lvgl.page.show:
+                    id: page_ip_edit
+                    animation: NONE
+
+        - label:
+            text: "."
+            text_font: montserrat_14
+            text_color: 0x888888
+            x: 175
+            y: 56
+
+        - button:
+            id: btn_ip_octet_4
+            x: 180
+            y: 52
+            width: 42
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  id: lbl_ip_o4
+                  text: "100"
+                  text_font: montserrat_12
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    id(editing_octet) = 4;
+                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_4), LV_ANIM_OFF);
+                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 4");
+                    char buf[4];
+                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_4));
+                    lv_label_set_text(id(lbl_ip_edit_val), buf);
+                - lvgl.page.show:
+                    id: page_ip_edit
+                    animation: NONE
+
+        # Zone count
+        - label:
+            text: "Zones:"
+            text_font: montserrat_10
+            text_color: 0x888888
+            x: 30
+            y: 90
+
+        - slider:
+            id: slider_zone_count
+            x: 74
+            y: 92
+            width: 100
+            height: 12
+            min_value: 1
+            max_value: 32
+            value: 8
+            bg_color: 0x1A1A1A
+            indicator:
+              bg_color: 0x00E676
+            knob:
+              bg_color: 0xFFFFFF
+              radius: 6
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            on_value:
+              then:
+                - lvgl.label.update:
+                    id: lbl_zone_count_val
+                    text:
+                      format: "%d"
+                      args: ['(int)x']
+
+        - label:
+            id: lbl_zone_count_val
+            text: "8"
+            text_font: montserrat_12
+            text_color: 0x00E676
+            x: 184
+            y: 88
+
+        # Auto detect button
+        - button:
+            id: btn_auto_detect
+            align: TOP_MID
+            y: 112
+            width: 140
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "AUTO DETECT"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - script.execute: auto_detect_zones
+
+        # Save button
+        - button:
+            id: btn_settings_save
+            align: CENTER
+            y: 36
+            width: 120
+            height: 30
+            styles: style_btn
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "SAVE"
+                  text_font: montserrat_14
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - lambda: |-
+                    id(zone_count) = lv_slider_get_value(id(slider_zone_count));
+                - rtttl.play: "c:d=16,o=5,b=200:c,e"
+
+        # Back button
+        - button:
+            id: btn_settings_back
+            align: BOTTOM_MID
+            y: -28
+            width: 80
+            height: 26
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "< BACK"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_status
+                    animation: NONE
+
+    # ──────── PAGE: IP EDIT ────────
+    - id: page_ip_edit
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_ip_edit));
+      widgets:
+        - label:
+            id: lbl_ip_edit_title
+            text: "Octet 1"
+            text_font: montserrat_14
+            text_color: 0x888888
+            align: TOP_MID
+            y: 30
+
+        - label:
+            id: lbl_ip_edit_val
+            text: "192"
+            text_font: montserrat_28
+            text_color: 0x00E676
+            align: CENTER
+            y: -20
+
+        - slider:
+            id: slider_ip_val
+            align: CENTER
+            y: 16
+            width: 160
+            height: 14
+            min_value: 0
+            max_value: 255
+            value: 192
+            bg_color: 0x1A1A1A
+            indicator:
+              bg_color: 0x00E676
+            knob:
+              bg_color: 0xFFFFFF
+              radius: 7
+              width: 14
+              height: 14
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            on_value:
+              then:
+                - lvgl.label.update:
+                    id: lbl_ip_edit_val
+                    text:
+                      format: "%d"
+                      args: ['(int)x']
+
+        - button:
+            id: btn_ip_edit_ok
+            align: BOTTOM_MID
+            x: -50
+            y: -30
+            width: 80
+            height: 30
+            styles: style_btn
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "OK"
+                  text_font: montserrat_14
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - lambda: |-
+                    int val = lv_slider_get_value(id(slider_ip_val));
+                    int octet = id(editing_octet);
+                    if (octet == 1) id(ip_octet_1) = val;
+                    else if (octet == 2) id(ip_octet_2) = val;
+                    else if (octet == 3) id(ip_octet_3) = val;
+                    else if (octet == 4) id(ip_octet_4) = val;
+                - lvgl.page.show:
+                    id: page_settings
+                    animation: NONE
+
+        - button:
+            id: btn_ip_edit_cancel
+            align: BOTTOM_MID
+            x: 50
+            y: -30
+            width: 80
+            height: 30
+            styles: style_btn_outline
+            on_focus:
+              then:
+                - rtttl.play: "c:d=32,o=6,b=200:c"
+            widgets:
+              - label:
+                  text: "CANCEL"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lvgl.page.show:
+                    id: page_settings
+                    animation: NONE
