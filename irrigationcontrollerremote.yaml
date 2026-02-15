@@ -230,7 +230,7 @@ touchscreen:
           id(last_interaction_ms) = millis();
           if (id(zone_active_showing)) {
             id(zone_active_showing) = false;
-            lv_scr_load(id(page_status));
+            lv_scr_load(id(page_status)->obj);
           }
 
 light:
@@ -452,7 +452,7 @@ sensor:
           id(last_interaction_ms) = millis();
           if (id(zone_active_showing)) {
             id(zone_active_showing) = false;
-            lv_scr_load(id(page_status));
+            lv_scr_load(id(page_status)->obj);
           }
 
   - platform: wifi_signal
@@ -478,7 +478,7 @@ binary_sensor:
           id(last_interaction_ms) = millis();
           if (id(zone_active_showing)) {
             id(zone_active_showing) = false;
-            lv_scr_load(id(page_status));
+            lv_scr_load(id(page_status)->obj);
           }
 
   - platform: template
@@ -1049,7 +1049,7 @@ script:
                           id(poll_error_count) = 0;
                           id(controller_connected) = true;
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               id(ctrl_valve_status) = root["state"].as<std::string>();
                             }
                             return true;
@@ -1087,7 +1087,7 @@ script:
                             // If active zone page is showing but nothing is active, go to status
                             if (id(zone_active_showing)) {
                               id(zone_active_showing) = false;
-                              lv_scr_load(id(page_status));
+                              lv_scr_load(id(page_status)->obj);
                             }
                           }
                           lv_label_set_text(id(lbl_connection), "Connected");
@@ -1108,7 +1108,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               id(ctrl_time_remaining) = root["state"].as<std::string>();
                             }
                             return true;
@@ -1132,7 +1132,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               id(ctrl_progress) = root["state"].as<std::string>();
                             }
                             return true;
@@ -1154,7 +1154,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               id(ctrl_main_switch_on) = root["value"].as<bool>();
                             }
                             return true;
@@ -1180,7 +1180,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               id(ctrl_auto_advance_on) = root["value"].as<bool>();
                             }
                             return true;
@@ -1224,7 +1224,7 @@ script:
                         if (response->status_code == 200) {
                           int zone = id(zone_poll_idx);
                           json::parse_json(body, [zone](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               bool on = root["value"].as<bool>();
                               if (on) {
                                 id(zone_states) |= (1u << zone);
@@ -1259,7 +1259,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               id(sched_enabled) = root["value"].as<bool>();
                             }
                             return true;
@@ -1279,7 +1279,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               if (root["value"].as<bool>()) id(sched_days) |= (1 << 0);
                               else id(sched_days) &= ~(1 << 0);
                             }
@@ -1299,7 +1299,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               if (root["value"].as<bool>()) id(sched_days) |= (1 << 1);
                               else id(sched_days) &= ~(1 << 1);
                             }
@@ -1319,7 +1319,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               if (root["value"].as<bool>()) id(sched_days) |= (1 << 2);
                               else id(sched_days) &= ~(1 << 2);
                             }
@@ -1339,7 +1339,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               if (root["value"].as<bool>()) id(sched_days) |= (1 << 3);
                               else id(sched_days) &= ~(1 << 3);
                             }
@@ -1359,7 +1359,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               if (root["value"].as<bool>()) id(sched_days) |= (1 << 4);
                               else id(sched_days) &= ~(1 << 4);
                             }
@@ -1379,7 +1379,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               if (root["value"].as<bool>()) id(sched_days) |= (1 << 5);
                               else id(sched_days) &= ~(1 << 5);
                             }
@@ -1399,7 +1399,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("value")) {
+                            if (root["value"].is<bool>()) {
                               if (root["value"].as<bool>()) id(sched_days) |= (1 << 6);
                               else id(sched_days) &= ~(1 << 6);
                             }
@@ -1420,7 +1420,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               std::string val = root["state"].as<std::string>();
                               id(sched_time_1) = val.empty() ? "--:--" : val;
                             }
@@ -1440,7 +1440,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               std::string val = root["state"].as<std::string>();
                               id(sched_time_2) = val.empty() ? "--:--" : val;
                             }
@@ -1460,7 +1460,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               std::string val = root["state"].as<std::string>();
                               id(sched_time_3) = val.empty() ? "--:--" : val;
                             }
@@ -1480,7 +1480,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               std::string val = root["state"].as<std::string>();
                               id(sched_time_4) = val.empty() ? "--:--" : val;
                             }
@@ -1653,7 +1653,7 @@ script:
                     - lambda: |-
                         if (response->status_code == 200) {
                           json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root.containsKey("state")) {
+                            if (root["state"].is<const char*>()) {
                               std::string s = root["state"].as<std::string>();
                               // Parse "8 zones (no expansion boards)" or "16 zones (0x20)"
                               int n = atoi(s.c_str());
@@ -1768,7 +1768,7 @@ interval:
             uint32_t elapsed = now - id(last_interaction_ms);
             if (elapsed >= 60000) {
               id(zone_active_showing) = true;
-              lv_scr_load(id(page_active_zone));
+              lv_scr_load(id(page_active_zone)->obj);
             }
           }
 
