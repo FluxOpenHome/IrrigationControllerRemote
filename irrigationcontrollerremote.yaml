@@ -5,7 +5,7 @@
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "1.0.0"
+  software_version: "1.0.3"
 
 esphome:
   name: "${name}"
@@ -128,10 +128,7 @@ esp32:
   framework:
     type: esp-idf
     sdkconfig_options:
-      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE: "y"
-      CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL: "y"
       CONFIG_HTTP_BUF_SIZE: "8192"
-      CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS: "y"
 
 logger:
   level: DEBUG
@@ -142,23 +139,14 @@ api:
 ota:
   - id: ota_component
     platform: esphome
-  - id: ota_http_request
-    platform: http_request
 
 http_request:
   id: http_req
   buffer_size_rx: 2048
   buffer_size_tx: 1024
-  follow_redirects: true
+  follow_redirects: false
   timeout: 2s
   verify_ssl: false
-
-# Firmware update from GitHub
-update:
-  - platform: http_request
-    id: firmware_update
-    name: "Firmware Update"
-    source: https://raw.githubusercontent.com/FluxOpenHome/IrrigationControllerRemote/main/manifest.json
 
 # Required for json::parse_json in HTTP response lambdas
 json:
@@ -297,6 +285,10 @@ globals:
     type: bool
     restore_value: no
     initial_value: 'false'
+  - id: poll_backoff_ticks
+    type: int
+    restore_value: no
+    initial_value: '0'
 
   # Controller IP (stored as 4 octets, persists across reboots)
   - id: ip_octet_1
@@ -1020,7 +1012,18 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected) && !id(http_busy);'
+            lambda: |-
+              if (!id(wifi_connected) || id(http_busy)) return false;
+              // Backoff: when disconnected from controller, skip most ticks
+              // After 3 errors, only try once per ~30s (6 ticks * 5s interval)
+              if (id(poll_error_count) >= 3) {
+                if (id(poll_backoff_ticks) > 0) {
+                  id(poll_backoff_ticks)--;
+                  return false;
+                }
+                id(poll_backoff_ticks) = 6;
+              }
+              return true;
           then:
             - lambda: |-
                 int step = id(poll_step);
@@ -1044,6 +1047,7 @@ script:
                               id(http_busy) = false;
                               if (response->status_code == 200) {
                                 id(poll_error_count) = 0;
+                                id(poll_backoff_ticks) = 0;
                                 id(controller_connected) = true;
                                 json::parse_json(body, [](JsonObject root) -> bool {
                                   if (root["state"].is<const char*>()) {
@@ -1124,7 +1128,7 @@ script:
                               }
                       on_error:
                         then:
-                          - lambda: 'id(http_busy) = false;'
+                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
             - if:
                 condition:
                   lambda: 'return id(poll_step) == 3;'
@@ -1155,7 +1159,7 @@ script:
                               }
                       on_error:
                         then:
-                          - lambda: 'id(http_busy) = false;'
+                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
             - if:
                 condition:
                   lambda: 'return id(poll_step) == 4;'
@@ -1190,7 +1194,7 @@ script:
                               }
                       on_error:
                         then:
-                          - lambda: 'id(http_busy) = false;'
+                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
             - if:
                 condition:
                   lambda: 'return id(poll_step) == 0;'
@@ -1223,7 +1227,7 @@ script:
                               }
                       on_error:
                         then:
-                          - lambda: 'id(http_busy) = false;'
+                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
             # Check error count after any step
             - lambda: |-
                 if (id(poll_error_count) >= 3) {
@@ -1356,12 +1360,12 @@ script:
                   then:
                     - lambda: 'id(http_busy) = false;'
 
-  # --- Command scripts ---
+  # --- Command scripts (only fire if controller is reachable) ---
   - id: send_main_toggle
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1374,7 +1378,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1387,7 +1391,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1402,7 +1406,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1417,7 +1421,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1432,7 +1436,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1448,7 +1452,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1461,7 +1465,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1476,7 +1480,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1492,7 +1496,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.post:
                 url: !lambda |-
@@ -1505,7 +1509,7 @@ script:
     then:
       - if:
           condition:
-            lambda: 'return id(wifi_connected);'
+            lambda: 'return id(wifi_connected) && id(controller_connected);'
           then:
             - http_request.get:
                 url: !lambda |-
@@ -1611,17 +1615,17 @@ script:
 
 interval:
   # Each poll does exactly 1 HTTP GET (max 2s timeout), rotating through endpoints
-  - interval: 2s
-    then:
-      - script.execute: poll_status   # 5 endpoints, 1 per tick = full refresh every 10s
-
   - interval: 5s
     then:
-      - script.execute: poll_zone_states  # 1 zone per tick, cycles through all
+      - script.execute: poll_status   # 5 endpoints, 1 per tick = full refresh every 25s
 
   - interval: 10s
     then:
-      - script.execute: poll_schedule  # 12 endpoints, 1 per tick = full refresh every 2min
+      - script.execute: poll_zone_states  # 1 zone per tick, cycles through all
+
+  - interval: 30s
+    then:
+      - script.execute: poll_schedule  # 12 endpoints, 1 per tick = full refresh every 6min
 
   # Idle timeout: return to active zone page after 60s of no interaction
   # Uses LVGL's built-in inactivity tracker (touch + encoder + button)
