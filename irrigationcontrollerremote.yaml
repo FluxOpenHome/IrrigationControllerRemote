@@ -225,6 +225,13 @@ touchscreen:
     id: touch
     i2c_id: internal_i2c
     address: 0x38
+    on_touch:
+      - lambda: |-
+          id(last_interaction_ms) = millis();
+          if (id(zone_active_showing)) {
+            id(zone_active_showing) = false;
+            lv_scr_load(id(page_status));
+          }
 
 light:
   - platform: monochromatic
@@ -335,6 +342,10 @@ globals:
     type: std::string
     restore_value: no
     initial_value: '"--"'
+  - id: ctrl_active_zone
+    type: std::string
+    restore_value: no
+    initial_value: '"--"'
   - id: ctrl_progress
     type: std::string
     restore_value: no
@@ -408,6 +419,16 @@ globals:
     restore_value: no
     initial_value: '0'
 
+  # Idle timer for returning to active zone page
+  - id: last_interaction_ms
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+  - id: zone_active_showing
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
 # ──────────────────────────────────────────────
 # Sensors
 # ──────────────────────────────────────────────
@@ -426,6 +447,13 @@ sensor:
       mode:
         input: true
         pullup: true
+    on_value:
+      - lambda: |-
+          id(last_interaction_ms) = millis();
+          if (id(zone_active_showing)) {
+            id(zone_active_showing) = false;
+            lv_scr_load(id(page_status));
+          }
 
   - platform: wifi_signal
     name: "WiFi Signal"
@@ -445,6 +473,13 @@ binary_sensor:
         input: true
         pullup: true
       inverted: true
+    on_press:
+      - lambda: |-
+          id(last_interaction_ms) = millis();
+          if (id(zone_active_showing)) {
+            id(zone_active_showing) = false;
+            lv_scr_load(id(page_status));
+          }
 
   - platform: template
     name: "Controller Connected"
@@ -482,6 +517,20 @@ text_sensor:
     id: progress_entity
     icon: "mdi:progress-clock"
     lambda: 'return id(ctrl_progress);'
+    update_interval: 5s
+
+  - platform: template
+    name: "Active Zone"
+    id: active_zone_entity
+    icon: "mdi:sprinkler-variant"
+    lambda: 'return id(ctrl_active_zone);'
+    update_interval: 5s
+
+  - platform: template
+    name: "Remaining Time"
+    id: remaining_time_entity
+    icon: "mdi:timer-sand"
+    lambda: 'return id(ctrl_time_remaining);'
     update_interval: 5s
 
   - platform: template
@@ -598,6 +647,7 @@ switch:
     name: "Start/Stop"
     id: main_switch_entity
     icon: "mdi:play-pause"
+    restore_mode: DISABLED
     lambda: 'return id(ctrl_main_switch_on);'
     turn_on_action:
       - script.execute: send_main_toggle
@@ -608,6 +658,7 @@ switch:
     name: "Auto Advance"
     id: auto_advance_entity
     icon: "mdi:skip-next"
+    restore_mode: DISABLED
     lambda: 'return id(ctrl_auto_advance_on);'
     turn_on_action:
       - script.execute: send_auto_advance_toggle
@@ -618,6 +669,7 @@ switch:
     name: "Schedule Enabled"
     id: schedule_enabled_entity
     icon: "mdi:calendar-check"
+    restore_mode: DISABLED
     lambda: 'return id(sched_enabled);'
     turn_on_action:
       - script.execute: send_schedule_toggle
@@ -628,6 +680,7 @@ switch:
     name: "Schedule Monday"
     id: day_mon_entity
     icon: "mdi:calendar"
+    restore_mode: DISABLED
     lambda: 'return (id(sched_days) >> 0) & 1;'
     turn_on_action:
       - script.execute:
@@ -642,6 +695,7 @@ switch:
     name: "Schedule Tuesday"
     id: day_tue_entity
     icon: "mdi:calendar"
+    restore_mode: DISABLED
     lambda: 'return (id(sched_days) >> 1) & 1;'
     turn_on_action:
       - script.execute:
@@ -656,6 +710,7 @@ switch:
     name: "Schedule Wednesday"
     id: day_wed_entity
     icon: "mdi:calendar"
+    restore_mode: DISABLED
     lambda: 'return (id(sched_days) >> 2) & 1;'
     turn_on_action:
       - script.execute:
@@ -670,6 +725,7 @@ switch:
     name: "Schedule Thursday"
     id: day_thu_entity
     icon: "mdi:calendar"
+    restore_mode: DISABLED
     lambda: 'return (id(sched_days) >> 3) & 1;'
     turn_on_action:
       - script.execute:
@@ -684,6 +740,7 @@ switch:
     name: "Schedule Friday"
     id: day_fri_entity
     icon: "mdi:calendar"
+    restore_mode: DISABLED
     lambda: 'return (id(sched_days) >> 4) & 1;'
     turn_on_action:
       - script.execute:
@@ -698,6 +755,7 @@ switch:
     name: "Schedule Saturday"
     id: day_sat_entity
     icon: "mdi:calendar"
+    restore_mode: DISABLED
     lambda: 'return (id(sched_days) >> 5) & 1;'
     turn_on_action:
       - script.execute:
@@ -712,6 +770,7 @@ switch:
     name: "Schedule Sunday"
     id: day_sun_entity
     icon: "mdi:calendar"
+    restore_mode: DISABLED
     lambda: 'return (id(sched_days) >> 6) & 1;'
     turn_on_action:
       - script.execute:
@@ -970,574 +1029,645 @@ script:
   # --- Status polling (runs every 5s) ---
   - id: poll_status
     then:
-      - lambda: |-
-          if (!id(wifi_connected) || id(http_busy)) return;
-          id(http_busy) = true;
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Status",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 512
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    id(poll_error_count) = 0;
-                    id(controller_connected) = true;
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        id(ctrl_valve_status) = root["state"].as<std::string>();
-                      }
-                      return true;
-                    });
-                    lv_label_set_text(id(lbl_valve_status), id(ctrl_valve_status).c_str());
-                    std::string s = id(ctrl_valve_status);
-                    if (s.find("Active") != std::string::npos) {
-                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
-                    } else if (s == "Idle" || s == "System Ready") {
-                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x00E676), 0);
-                    } else if (s.find("Rain") != std::string::npos) {
-                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
-                    } else if (s == "Paused") {
-                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFAB00), 0);
-                    } else {
-                      lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFFFFF), 0);
-                    }
-                    lv_label_set_text(id(lbl_connection), "Connected");
-                    lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0x00E676), 0);
-                  } else {
-                    id(poll_error_count)++;
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Time%%20Remaining",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        id(ctrl_time_remaining) = root["state"].as<std::string>();
-                      }
-                      return true;
-                    });
-                    char buf[24];
-                    snprintf(buf, sizeof(buf), "Time: %s", id(ctrl_time_remaining).c_str());
-                    lv_label_set_text(id(lbl_time_remaining), buf);
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Progress",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        id(ctrl_progress) = root["state"].as<std::string>();
-                      }
-                      return true;
-                    });
-                    lv_label_set_text(id(lbl_progress), id(ctrl_progress).c_str());
-                    int pct = atoi(id(ctrl_progress).c_str());
-                    lv_bar_set_value(id(bar_progress), pct, LV_ANIM_ON);
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        id(ctrl_main_switch_on) = root["value"].as<bool>();
-                      }
-                      return true;
-                    });
-                    if (id(ctrl_main_switch_on)) {
-                      lv_label_set_text(id(lbl_start_stop), "STOP");
-                      lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0xFF3D00), 0);
-                    } else {
-                      lv_label_set_text(id(lbl_start_stop), "START");
-                      lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0x00E676), 0);
-                    }
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        id(ctrl_auto_advance_on) = root["value"].as<bool>();
-                      }
-                      return true;
-                    });
-                    if (id(ctrl_auto_advance_on)) {
-                      lv_label_set_text(id(lbl_auto_adv), "AUTO: ON");
-                    } else {
-                      lv_label_set_text(id(lbl_auto_adv), "AUTO: OFF");
-                    }
-                  }
-      - lambda: |-
-          id(http_busy) = false;
-          if (id(poll_error_count) >= 3) {
-            id(controller_connected) = false;
-            lv_label_set_text(id(lbl_connection), "Disconnected");
-            lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0xFF1744), 0);
-            lv_label_set_text(id(lbl_valve_status), "Disconnected");
-            lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFF1744), 0);
-          }
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected) && !id(http_busy);'
+          then:
+            - lambda: 'id(http_busy) = true;'
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Status",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 512
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          id(poll_error_count) = 0;
+                          id(controller_connected) = true;
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              id(ctrl_valve_status) = root["state"].as<std::string>();
+                            }
+                            return true;
+                          });
+                          lv_label_set_text(id(lbl_valve_status), id(ctrl_valve_status).c_str());
+                          std::string s = id(ctrl_valve_status);
+                          // Parse active zone number from "Zone N Active"
+                          size_t active_pos = s.find("Active");
+                          if (active_pos != std::string::npos) {
+                            lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
+                            // Extract zone number: find digits in the status string
+                            std::string zone_num = "--";
+                            for (size_t i = 0; i < active_pos; i++) {
+                              if (isdigit(s[i])) {
+                                size_t start = i;
+                                while (i < active_pos && isdigit(s[i])) i++;
+                                zone_num = s.substr(start, i - start);
+                                break;
+                              }
+                            }
+                            id(ctrl_active_zone) = zone_num;
+                            // Update the active zone page labels
+                            lv_label_set_text(id(lbl_big_zone), zone_num.c_str());
+                          } else {
+                            id(ctrl_active_zone) = "--";
+                            if (s == "Idle" || s == "System Ready") {
+                              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x00E676), 0);
+                            } else if (s.find("Rain") != std::string::npos) {
+                              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
+                            } else if (s == "Paused") {
+                              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFAB00), 0);
+                            } else {
+                              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFFFFF), 0);
+                            }
+                            // If active zone page is showing but nothing is active, go to status
+                            if (id(zone_active_showing)) {
+                              id(zone_active_showing) = false;
+                              lv_scr_load(id(page_status));
+                            }
+                          }
+                          lv_label_set_text(id(lbl_connection), "Connected");
+                          lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0x00E676), 0);
+                        } else {
+                          id(poll_error_count)++;
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Time%%20Remaining",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              id(ctrl_time_remaining) = root["state"].as<std::string>();
+                            }
+                            return true;
+                          });
+                          char buf[24];
+                          snprintf(buf, sizeof(buf), "Time: %s", id(ctrl_time_remaining).c_str());
+                          lv_label_set_text(id(lbl_time_remaining), buf);
+                          // Update big remaining time display
+                          lv_label_set_text(id(lbl_big_remaining), id(ctrl_time_remaining).c_str());
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Progress",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              id(ctrl_progress) = root["state"].as<std::string>();
+                            }
+                            return true;
+                          });
+                          lv_label_set_text(id(lbl_progress), id(ctrl_progress).c_str());
+                          int pct = atoi(id(ctrl_progress).c_str());
+                          lv_bar_set_value(id(bar_progress), pct, LV_ANIM_ON);
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              id(ctrl_main_switch_on) = root["value"].as<bool>();
+                            }
+                            return true;
+                          });
+                          if (id(ctrl_main_switch_on)) {
+                            lv_label_set_text(id(lbl_start_stop), "STOP");
+                            lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0xFF3D00), 0);
+                          } else {
+                            lv_label_set_text(id(lbl_start_stop), "START");
+                            lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0x00E676), 0);
+                          }
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              id(ctrl_auto_advance_on) = root["value"].as<bool>();
+                            }
+                            return true;
+                          });
+                          if (id(ctrl_auto_advance_on)) {
+                            lv_label_set_text(id(lbl_auto_adv), "AUTO: ON");
+                          } else {
+                            lv_label_set_text(id(lbl_auto_adv), "AUTO: OFF");
+                          }
+                        }
+            - lambda: |-
+                id(http_busy) = false;
+                if (id(poll_error_count) >= 3) {
+                  id(controller_connected) = false;
+                  lv_label_set_text(id(lbl_connection), "Disconnected");
+                  lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0xFF1744), 0);
+                  lv_label_set_text(id(lbl_valve_status), "Disconnected");
+                  lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFF1744), 0);
+                }
 
   # --- Zone state polling (rotating, 2 zones per tick) ---
   - id: poll_zone_states
     then:
-      - lambda: |-
-          if (!id(wifi_connected) || id(http_busy) || !id(controller_connected)) return;
-          // We poll zones one at a time via sequential calls below
-          // Store the current index to poll
-          int zc = id(zone_count);
-          if (zc <= 0) return;
-          id(zone_poll_idx) = id(zone_poll_idx) % zc;
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            int zone = id(zone_poll_idx) + 1;
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone);
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    int zone = id(zone_poll_idx);
-                    json::parse_json(body, [zone](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        bool on = root["value"].as<bool>();
-                        if (on) {
-                          id(zone_states) |= (1u << zone);
-                        } else {
-                          id(zone_states) &= ~(1u << zone);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected) && !id(http_busy) && id(controller_connected) && id(zone_count) > 0;'
+          then:
+            - lambda: 'id(zone_poll_idx) = id(zone_poll_idx) % id(zone_count);'
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  int zone = id(zone_poll_idx) + 1;
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone);
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          int zone = id(zone_poll_idx);
+                          json::parse_json(body, [zone](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              bool on = root["value"].as<bool>();
+                              if (on) {
+                                id(zone_states) |= (1u << zone);
+                              } else {
+                                id(zone_states) &= ~(1u << zone);
+                              }
+                            }
+                            return true;
+                          });
                         }
-                      }
-                      return true;
-                    });
-                  }
-      - lambda: |-
-          id(zone_poll_idx) = (id(zone_poll_idx) + 1) % id(zone_count);
+            - lambda: |-
+                id(zone_poll_idx) = (id(zone_poll_idx) + 1) % id(zone_count);
 
   # --- Schedule polling (runs every 30s) ---
   - id: poll_schedule
     then:
-      - lambda: |-
-          if (!id(wifi_connected) || id(http_busy) || !id(controller_connected)) return;
-          id(http_busy) = true;
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        id(sched_enabled) = root["value"].as<bool>();
-                      }
-                      return true;
-                    });
-                  }
-      # Poll day switches - Monday through Sunday
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Monday",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 0);
-                        else id(sched_days) &= ~(1 << 0);
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Tuesday",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 1);
-                        else id(sched_days) &= ~(1 << 1);
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Wednesday",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 2);
-                        else id(sched_days) &= ~(1 << 2);
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Thursday",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 3);
-                        else id(sched_days) &= ~(1 << 3);
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Friday",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 4);
-                        else id(sched_days) &= ~(1 << 4);
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Saturday",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 5);
-                        else id(sched_days) &= ~(1 << 5);
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Sunday",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("value")) {
-                        if (root["value"].as<bool>()) id(sched_days) |= (1 << 6);
-                        else id(sched_days) &= ~(1 << 6);
-                      }
-                      return true;
-                    });
-                  }
-      # Poll start times
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%201",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        std::string val = root["state"].as<std::string>();
-                        id(sched_time_1) = val.empty() ? "--:--" : val;
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%202",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        std::string val = root["state"].as<std::string>();
-                        id(sched_time_2) = val.empty() ? "--:--" : val;
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%203",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        std::string val = root["state"].as<std::string>();
-                        id(sched_time_3) = val.empty() ? "--:--" : val;
-                      }
-                      return true;
-                    });
-                  }
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%204",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        std::string val = root["state"].as<std::string>();
-                        id(sched_time_4) = val.empty() ? "--:--" : val;
-                      }
-                      return true;
-                    });
-                  }
-      - lambda: 'id(http_busy) = false;'
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected) && !id(http_busy) && id(controller_connected);'
+          then:
+            - lambda: 'id(http_busy) = true;'
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              id(sched_enabled) = root["value"].as<bool>();
+                            }
+                            return true;
+                          });
+                        }
+            # Poll day switches - Monday through Sunday
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Monday",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              if (root["value"].as<bool>()) id(sched_days) |= (1 << 0);
+                              else id(sched_days) &= ~(1 << 0);
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Tuesday",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              if (root["value"].as<bool>()) id(sched_days) |= (1 << 1);
+                              else id(sched_days) &= ~(1 << 1);
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Wednesday",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              if (root["value"].as<bool>()) id(sched_days) |= (1 << 2);
+                              else id(sched_days) &= ~(1 << 2);
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Thursday",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              if (root["value"].as<bool>()) id(sched_days) |= (1 << 3);
+                              else id(sched_days) &= ~(1 << 3);
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Friday",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              if (root["value"].as<bool>()) id(sched_days) |= (1 << 4);
+                              else id(sched_days) &= ~(1 << 4);
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Saturday",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              if (root["value"].as<bool>()) id(sched_days) |= (1 << 5);
+                              else id(sched_days) &= ~(1 << 5);
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20Sunday",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("value")) {
+                              if (root["value"].as<bool>()) id(sched_days) |= (1 << 6);
+                              else id(sched_days) &= ~(1 << 6);
+                            }
+                            return true;
+                          });
+                        }
+            # Poll start times
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%201",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              std::string val = root["state"].as<std::string>();
+                              id(sched_time_1) = val.empty() ? "--:--" : val;
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%202",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              std::string val = root["state"].as<std::string>();
+                              id(sched_time_2) = val.empty() ? "--:--" : val;
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%203",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              std::string val = root["state"].as<std::string>();
+                              id(sched_time_3) = val.empty() ? "--:--" : val;
+                            }
+                            return true;
+                          });
+                        }
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%204",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              std::string val = root["state"].as<std::string>();
+                              id(sched_time_4) = val.empty() ? "--:--" : val;
+                            }
+                            return true;
+                          });
+                        }
+            - lambda: 'id(http_busy) = false;'
 
   # --- Command scripts ---
   - id: send_main_toggle
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume/toggle",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume/toggle",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
 
   - id: send_pause
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/button/Pause/press",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/button/Pause/press",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
 
   - id: send_auto_advance_toggle
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance/toggle",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance/toggle",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
 
   - id: send_zone_on
     parameters:
       zone_num: int
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_on",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_on",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
+                  return std::string(url);
 
   - id: send_zone_off
     parameters:
       zone_num: int
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_off",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_off",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
+                  return std::string(url);
 
   - id: send_zone_toggle
     parameters:
       zone_num: int
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/toggle",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/toggle",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
+                  return std::string(url);
 
   - id: send_duration_set
     parameters:
       zone_num: int
       duration_val: int
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/number/Zone%%20%d%%20Duration/set?value=%d",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num, duration_val);
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/number/Zone%%20%d%%20Duration/set?value=%d",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num, duration_val);
+                  return std::string(url);
 
   - id: send_schedule_toggle
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled/toggle",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled/toggle",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
 
   - id: send_day_toggle
     parameters:
       day_name: string
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20%s/toggle",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), day_name.c_str());
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20%s/toggle",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), day_name.c_str());
+                  return std::string(url);
 
   - id: send_schedule_time
     parameters:
       slot: int
       time_str: string
     then:
-      - http_request.post:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%20%d/set?value=%s",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), slot, time_str.c_str());
-            return std::string(url);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.post:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%20%d/set?value=%s",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), slot, time_str.c_str());
+                  return std::string(url);
 
   - id: auto_detect_zones
     then:
-      - http_request.get:
-          url: !lambda |-
-            char url[128];
-            snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Detected%%20Zones",
-                     id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-            return std::string(url);
-          capture_response: true
-          max_response_buffer_size: 256
-          on_response:
-            then:
-              - lambda: |-
-                  if (response->status_code == 200) {
-                    json::parse_json(body, [](JsonObject root) -> bool {
-                      if (root.containsKey("state")) {
-                        std::string s = root["state"].as<std::string>();
-                        // Parse "8 zones (no expansion boards)" or "16 zones (0x20)"
-                        int n = atoi(s.c_str());
-                        if (n >= 1 && n <= 32) {
-                          id(zone_count) = n;
-                          lv_slider_set_value(id(slider_zone_count), n, LV_ANIM_ON);
-                          char buf[4];
-                          snprintf(buf, sizeof(buf), "%d", n);
-                          lv_label_set_text(id(lbl_zone_count_val), buf);
+      - if:
+          condition:
+            lambda: 'return id(wifi_connected);'
+          then:
+            - http_request.get:
+                url: !lambda |-
+                  char url[128];
+                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Detected%%20Zones",
+                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+                  return std::string(url);
+                capture_response: true
+                max_response_buffer_size: 256
+                on_response:
+                  then:
+                    - lambda: |-
+                        if (response->status_code == 200) {
+                          json::parse_json(body, [](JsonObject root) -> bool {
+                            if (root.containsKey("state")) {
+                              std::string s = root["state"].as<std::string>();
+                              // Parse "8 zones (no expansion boards)" or "16 zones (0x20)"
+                              int n = atoi(s.c_str());
+                              if (n >= 1 && n <= 32) {
+                                id(zone_count) = n;
+                                lv_slider_set_value(id(slider_zone_count), n, LV_ANIM_ON);
+                                char buf[4];
+                                snprintf(buf, sizeof(buf), "%d", n);
+                                lv_label_set_text(id(lbl_zone_count_val), buf);
+                              }
+                            }
+                            return true;
+                          });
                         }
-                      }
-                      return true;
-                    });
-                  }
 
   # --- Helper: refresh zone page buttons ---
   - id: refresh_zone_buttons
@@ -1624,6 +1754,23 @@ interval:
   - interval: 30s
     then:
       - script.execute: poll_schedule
+
+  # Idle timeout: return to active zone page after 60s of no interaction
+  - interval: 5s
+    then:
+      - lambda: |-
+          // If a zone is active and user hasn't interacted in 60s, show the active zone page
+          if (id(ctrl_active_zone) != "--" && !id(zone_active_showing)) {
+            uint32_t now = millis();
+            if (id(last_interaction_ms) == 0) {
+              id(last_interaction_ms) = now;
+            }
+            uint32_t elapsed = now - id(last_interaction_ms);
+            if (elapsed >= 60000) {
+              id(zone_active_showing) = true;
+              lv_scr_load(id(page_active_zone));
+            }
+          }
 
 # ──────────────────────────────────────────────
 # LVGL UI
@@ -3260,3 +3407,39 @@ lvgl:
                 - lvgl.page.show:
                     id: page_settings
                     animation: NONE
+
+    # ──────── PAGE: ACTIVE ZONE (big display when zone running) ────────
+    - id: page_active_zone
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      widgets:
+        - label:
+            id: lbl_big_zone_title
+            text: "ZONE"
+            text_font: montserrat_14
+            text_color: 0x888888
+            align: TOP_MID
+            y: 40
+
+        - label:
+            id: lbl_big_zone
+            text: "--"
+            text_font: montserrat_48
+            text_color: 0x00E676
+            align: CENTER
+            y: -20
+
+        - label:
+            id: lbl_big_remaining
+            text: "--"
+            text_font: montserrat_28
+            text_color: 0x2979FF
+            align: CENTER
+            y: 40
+
+        - label:
+            text: "tap to exit"
+            text_font: montserrat_10
+            text_color: 0x444444
+            align: BOTTOM_MID
+            y: -20
