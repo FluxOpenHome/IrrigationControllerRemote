@@ -130,8 +130,11 @@ esp32:
     sdkconfig_options:
       CONFIG_MBEDTLS_CERTIFICATE_BUNDLE: "y"
       CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL: "y"
-      CONFIG_HTTP_BUF_SIZE: "16384"
+      CONFIG_HTTP_BUF_SIZE: "8192"
       CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS: "y"
+      CONFIG_SPIRAM: "y"
+      CONFIG_SPIRAM_MODE_OCT: "y"
+      CONFIG_SPIRAM_SPEED_80M: "y"
 
 logger:
   level: DEBUG
@@ -145,13 +148,15 @@ ota:
 
 http_request:
   id: http_req
-  buffer_size_rx: 4096
-  buffer_size_tx: 2048
+  buffer_size_rx: 2048
+  buffer_size_tx: 1024
   follow_redirects: false
   timeout: 5s
   verify_ssl: false
 
+# Required for json::parse_json in HTTP response lambdas
 json:
+  id: json_component
 
 wifi:
   id: wifi_component
@@ -444,6 +449,522 @@ binary_sensor:
         input: true
         pullup: true
       inverted: true
+
+  - platform: template
+    name: "Controller Connected"
+    id: controller_connected_bin
+    device_class: "connectivity"
+    lambda: 'return id(controller_connected);'
+
+  - platform: template
+    name: "WiFi Connected"
+    id: wifi_connected_bin
+    device_class: "connectivity"
+    lambda: 'return id(wifi_connected);'
+
+# ──────────────────────────────────────────────
+# Exposed Entities - Text Sensors (read-only status from controller)
+# ──────────────────────────────────────────────
+
+text_sensor:
+  - platform: template
+    name: "Valve Status"
+    id: valve_status_entity
+    icon: "mdi:valve"
+    lambda: 'return id(ctrl_valve_status);'
+    update_interval: 5s
+
+  - platform: template
+    name: "Time Remaining"
+    id: time_remaining_entity
+    icon: "mdi:timer-sand"
+    lambda: 'return id(ctrl_time_remaining);'
+    update_interval: 5s
+
+  - platform: template
+    name: "Progress"
+    id: progress_entity
+    icon: "mdi:progress-clock"
+    lambda: 'return id(ctrl_progress);'
+    update_interval: 5s
+
+  - platform: template
+    name: "Controller IP"
+    id: controller_ip_entity
+    icon: "mdi:ip-network"
+    lambda: |-
+      char buf[20];
+      snprintf(buf, sizeof(buf), "%d.%d.%d.%d",
+               id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
+      return std::string(buf);
+    update_interval: 60s
+
+  - platform: version
+    name: "ESPHome Version"
+
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+    ssid:
+      name: "Connected SSID"
+
+# ──────────────────────────────────────────────
+# Exposed Entities - Numbers (adjustable settings)
+# ──────────────────────────────────────────────
+
+number:
+  - platform: template
+    name: "Zone Count"
+    id: zone_count_entity
+    icon: "mdi:water"
+    min_value: 1
+    max_value: 32
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 8
+    entity_category: config
+    set_action:
+      - lambda: |-
+          id(zone_count) = (int)x;
+          lv_slider_set_value(id(slider_zone_count), (int)x, LV_ANIM_ON);
+          char buf[4];
+          snprintf(buf, sizeof(buf), "%d", (int)x);
+          lv_label_set_text(id(lbl_zone_count_val), buf);
+
+  - platform: template
+    name: "IP Octet 1"
+    id: ip_octet_1_entity
+    icon: "mdi:ip-network"
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 192
+    entity_category: config
+    set_action:
+      - lambda: 'id(ip_octet_1) = (int)x;'
+
+  - platform: template
+    name: "IP Octet 2"
+    id: ip_octet_2_entity
+    icon: "mdi:ip-network"
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 168
+    entity_category: config
+    set_action:
+      - lambda: 'id(ip_octet_2) = (int)x;'
+
+  - platform: template
+    name: "IP Octet 3"
+    id: ip_octet_3_entity
+    icon: "mdi:ip-network"
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 1
+    entity_category: config
+    set_action:
+      - lambda: 'id(ip_octet_3) = (int)x;'
+
+  - platform: template
+    name: "IP Octet 4"
+    id: ip_octet_4_entity
+    icon: "mdi:ip-network"
+    min_value: 0
+    max_value: 255
+    step: 1
+    mode: box
+    optimistic: true
+    restore_value: true
+    initial_value: 100
+    entity_category: config
+    set_action:
+      - lambda: 'id(ip_octet_4) = (int)x;'
+
+# ──────────────────────────────────────────────
+# Exposed Entities - Switches (toggleable controls)
+# ──────────────────────────────────────────────
+
+switch:
+  - platform: template
+    name: "Start/Stop"
+    id: main_switch_entity
+    icon: "mdi:play-pause"
+    lambda: 'return id(ctrl_main_switch_on);'
+    turn_on_action:
+      - script.execute: send_main_toggle
+    turn_off_action:
+      - script.execute: send_main_toggle
+
+  - platform: template
+    name: "Auto Advance"
+    id: auto_advance_entity
+    icon: "mdi:skip-next"
+    lambda: 'return id(ctrl_auto_advance_on);'
+    turn_on_action:
+      - script.execute: send_auto_advance_toggle
+    turn_off_action:
+      - script.execute: send_auto_advance_toggle
+
+  - platform: template
+    name: "Schedule Enabled"
+    id: schedule_enabled_entity
+    icon: "mdi:calendar-check"
+    lambda: 'return id(sched_enabled);'
+    turn_on_action:
+      - script.execute: send_schedule_toggle
+    turn_off_action:
+      - script.execute: send_schedule_toggle
+
+  - platform: template
+    name: "Schedule Monday"
+    id: day_mon_entity
+    icon: "mdi:calendar"
+    lambda: 'return (id(sched_days) >> 0) & 1;'
+    turn_on_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Monday"
+    turn_off_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Monday"
+
+  - platform: template
+    name: "Schedule Tuesday"
+    id: day_tue_entity
+    icon: "mdi:calendar"
+    lambda: 'return (id(sched_days) >> 1) & 1;'
+    turn_on_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Tuesday"
+    turn_off_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Tuesday"
+
+  - platform: template
+    name: "Schedule Wednesday"
+    id: day_wed_entity
+    icon: "mdi:calendar"
+    lambda: 'return (id(sched_days) >> 2) & 1;'
+    turn_on_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Wednesday"
+    turn_off_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Wednesday"
+
+  - platform: template
+    name: "Schedule Thursday"
+    id: day_thu_entity
+    icon: "mdi:calendar"
+    lambda: 'return (id(sched_days) >> 3) & 1;'
+    turn_on_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Thursday"
+    turn_off_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Thursday"
+
+  - platform: template
+    name: "Schedule Friday"
+    id: day_fri_entity
+    icon: "mdi:calendar"
+    lambda: 'return (id(sched_days) >> 4) & 1;'
+    turn_on_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Friday"
+    turn_off_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Friday"
+
+  - platform: template
+    name: "Schedule Saturday"
+    id: day_sat_entity
+    icon: "mdi:calendar"
+    lambda: 'return (id(sched_days) >> 5) & 1;'
+    turn_on_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Saturday"
+    turn_off_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Saturday"
+
+  - platform: template
+    name: "Schedule Sunday"
+    id: day_sun_entity
+    icon: "mdi:calendar"
+    lambda: 'return (id(sched_days) >> 6) & 1;'
+    turn_on_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Sunday"
+    turn_off_action:
+      - script.execute:
+          id: send_day_toggle
+          day_name: "Sunday"
+
+# ──────────────────────────────────────────────
+# Exposed Entities - Buttons (one-shot actions)
+# ──────────────────────────────────────────────
+
+button:
+  - platform: template
+    name: "Pause"
+    id: pause_entity
+    icon: "mdi:pause"
+    on_press:
+      - script.execute: send_pause
+
+  - platform: template
+    name: "Auto Detect Zones"
+    id: auto_detect_entity
+    icon: "mdi:magnify"
+    entity_category: config
+    on_press:
+      - script.execute: auto_detect_zones
+
+  - platform: template
+    name: "Run Zone 1"
+    id: run_zone_1_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 1
+
+  - platform: template
+    name: "Run Zone 2"
+    id: run_zone_2_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 2
+
+  - platform: template
+    name: "Run Zone 3"
+    id: run_zone_3_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 3
+
+  - platform: template
+    name: "Run Zone 4"
+    id: run_zone_4_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 4
+
+  - platform: template
+    name: "Run Zone 5"
+    id: run_zone_5_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 5
+
+  - platform: template
+    name: "Run Zone 6"
+    id: run_zone_6_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 6
+
+  - platform: template
+    name: "Run Zone 7"
+    id: run_zone_7_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 7
+
+  - platform: template
+    name: "Run Zone 8"
+    id: run_zone_8_btn
+    icon: "mdi:sprinkler"
+    on_press:
+      - script.execute:
+          id: send_zone_on
+          zone_num: 8
+
+  - platform: template
+    name: "Stop Zone 1"
+    id: stop_zone_1_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 1
+
+  - platform: template
+    name: "Stop Zone 2"
+    id: stop_zone_2_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 2
+
+  - platform: template
+    name: "Stop Zone 3"
+    id: stop_zone_3_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 3
+
+  - platform: template
+    name: "Stop Zone 4"
+    id: stop_zone_4_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 4
+
+  - platform: template
+    name: "Stop Zone 5"
+    id: stop_zone_5_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 5
+
+  - platform: template
+    name: "Stop Zone 6"
+    id: stop_zone_6_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 6
+
+  - platform: template
+    name: "Stop Zone 7"
+    id: stop_zone_7_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 7
+
+  - platform: template
+    name: "Stop Zone 8"
+    id: stop_zone_8_btn
+    icon: "mdi:sprinkler-off"
+    on_press:
+      - script.execute:
+          id: send_zone_off
+          zone_num: 8
+
+  - platform: restart
+    name: "Restart"
+
+# ──────────────────────────────────────────────
+# Exposed Entities - Text (editable schedule times)
+# ──────────────────────────────────────────────
+
+text:
+  - platform: template
+    name: "Schedule Start Time 1"
+    id: sched_time_1_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    set_action:
+      - lambda: |-
+          id(sched_time_1) = x.empty() ? "--:--" : x;
+      - script.execute:
+          id: send_schedule_time
+          slot: 1
+          time_str: !lambda 'return x;'
+
+  - platform: template
+    name: "Schedule Start Time 2"
+    id: sched_time_2_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    set_action:
+      - lambda: |-
+          id(sched_time_2) = x.empty() ? "--:--" : x;
+      - script.execute:
+          id: send_schedule_time
+          slot: 2
+          time_str: !lambda 'return x;'
+
+  - platform: template
+    name: "Schedule Start Time 3"
+    id: sched_time_3_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    set_action:
+      - lambda: |-
+          id(sched_time_3) = x.empty() ? "--:--" : x;
+      - script.execute:
+          id: send_schedule_time
+          slot: 3
+          time_str: !lambda 'return x;'
+
+  - platform: template
+    name: "Schedule Start Time 4"
+    id: sched_time_4_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    set_action:
+      - lambda: |-
+          id(sched_time_4) = x.empty() ? "--:--" : x;
+      - script.execute:
+          id: send_schedule_time
+          slot: 4
+          time_str: !lambda 'return x;'
 
 # ──────────────────────────────────────────────
 # Scripts
