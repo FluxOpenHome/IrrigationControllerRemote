@@ -156,7 +156,6 @@ http_request:
 
 # Required for json::parse_json in HTTP response lambdas
 json:
-  id: json_component
 
 wifi:
   id: wifi_component
