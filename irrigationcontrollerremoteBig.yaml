@@ -155,7 +155,7 @@ http_request:
   buffer_size_tx: 1024
   follow_redirects: true
   timeout: 2s
-  verify_ssl: true
+  verify_ssl: false
 
 # Firmware update from GitHub
 update:
