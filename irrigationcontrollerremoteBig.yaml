@@ -3,8 +3,8 @@
 # Communicates via HTTP REST to the controller's web server
 
 substitutions:
-  name: "irrigation-remote"
-  friendly_name: "Irrigation Remote"
+  name: "irrigation-remote-big"
+  friendly_name: "Irrigation Remote Big"
   software_version: "1.0.0"
 
 esphome:
@@ -16,7 +16,8 @@ esphome:
     version: "${software_version}"
   platformio_options:
     board_build.flash_mode: dio
-    board_build.flash_size: 8MB
+    board_build.flash_size: 16MB
+    board_build.psram_mode: opi
   on_boot:
     priority: -100
     then:
@@ -124,7 +125,7 @@ esphome:
 esp32:
   variant: esp32s3
   board: esp32-s3-devkitc-1
-  flash_size: 8MB
+  flash_size: 16MB
   framework:
     type: esp-idf
     sdkconfig_options:
@@ -132,6 +133,9 @@ esp32:
       CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL: "y"
       CONFIG_HTTP_BUF_SIZE: "8192"
       CONFIG_ESP_HTTP_CLIENT_ENABLE_HTTPS: "y"
+      CONFIG_SPIRAM: "y"
+      CONFIG_SPIRAM_MODE_OCT: "y"
+      CONFIG_SPIRAM_SPEED_80M: "y"
 
 logger:
   level: DEBUG
@@ -158,7 +162,7 @@ update:
   - platform: http_request
     id: firmware_update
     name: "Firmware Update"
-    source: https://raw.githubusercontent.com/FluxOpenHome/IrrigationControllerRemote/main/manifest.json
+    source: https://raw.githubusercontent.com/FluxOpenHome/IrrigationControllerRemote/main/manifestBig.json
 
 # Required for json::parse_json in HTTP response lambdas
 json:
@@ -188,7 +192,7 @@ esp32_improv:
 improv_serial:
 
 dashboard_import:
-  package_import_url: github://FluxOpenHome/IrrigationControllerRemote/irrigationcontrollerremote.yaml@main
+  package_import_url: github://FluxOpenHome/IrrigationControllerRemote/irrigationcontrollerremoteBig.yaml@main
   import_full_config: true
 
 web_server:
@@ -200,40 +204,65 @@ web_server:
 
 i2c:
   - id: internal_i2c
-    sda: GPIO11
-    scl: GPIO12
-
-spi:
-  - id: spi_bus
-    clk_pin: GPIO6
-    mosi_pin: GPIO5
+    sda: GPIO16
+    scl: GPIO15
 
 output:
   - platform: ledc
-    pin: GPIO9
+    pin: GPIO38
     id: lcd_backlight_output
     channel: 0
-  - platform: ledc
-    pin: GPIO3
-    id: buzzer_output
-    channel: 2
 
 display:
-  - platform: ili9xxx
-    model: GC9A01A
-    cs_pin: GPIO7
-    reset_pin: GPIO8
-    dc_pin: GPIO4
+  - platform: st7701s
     id: dial_lcd
-    invert_colors: true
     auto_clear_enabled: false
     update_interval: never
+    dimensions:
+      width: 480
+      height: 480
+    cs_pin: GPIO39
+    de_pin: GPIO18
+    hsync_pin: GPIO47
+    vsync_pin: GPIO48
+    pclk_pin: GPIO21
+    pclk_frequency: 12MHz
+    pclk_inverted: true
+    hsync_front_porch: 10
+    hsync_pulse_width: 8
+    hsync_back_porch: 50
+    vsync_front_porch: 10
+    vsync_pulse_width: 8
+    vsync_back_porch: 20
+    data_pins:
+      red:
+        - GPIO11
+        - GPIO12
+        - GPIO13
+        - GPIO14
+        - GPIO0
+      green:
+        - GPIO8
+        - GPIO20
+        - GPIO3
+        - GPIO46
+        - GPIO9
+        - GPIO10
+      blue:
+        - GPIO4
+        - GPIO5
+        - GPIO6
+        - GPIO7
+        - GPIO15
+    init_sequence:
+      - 1
 
 touchscreen:
-  - platform: ft5x06
+  - platform: cst816
     id: touch
     i2c_id: internal_i2c
-    address: 0x38
+    interrupt_pin: GPIO40
+    reset_pin: GPIO41
 
 light:
   - platform: monochromatic
@@ -244,11 +273,6 @@ light:
     output: lcd_backlight_output
     restore_mode: RESTORE_DEFAULT_ON
     default_transition_length: 0s
-
-rtttl:
-  output: buzzer_output
-  id: buzzer
-  gain: 30%
 
 # ──────────────────────────────────────────────
 # Globals
@@ -448,12 +472,12 @@ sensor:
     id: dial_encoder
     resolution: 4
     pin_a:
-      number: GPIO40
+      number: GPIO6
       mode:
         input: true
         pullup: true
     pin_b:
-      number: GPIO41
+      number: GPIO5
       mode:
         input: true
         pullup: true
@@ -471,7 +495,7 @@ binary_sensor:
   - platform: gpio
     id: dial_button
     pin:
-      number: GPIO42
+      number: GPIO0
       mode:
         input: true
         pullup: true
@@ -1668,19 +1692,19 @@ lvgl:
     - sensor: dial_encoder
       enter_button: dial_button
   color_depth: 16
-  buffer_size: 10%
-  default_font: montserrat_14
+  buffer_size: 25%
+  default_font: montserrat_28
   disp_bg_color: 0x0D0D0D
 
   theme:
     button:
       focused:
         border_color: 0xFFFFFF
-        border_width: 2
+        border_width: 3
     slider:
       focused:
         border_color: 0xFFFFFF
-        border_width: 2
+        border_width: 3
       knob:
         edited:
           bg_color: 0xFF3D00
@@ -1688,21 +1712,21 @@ lvgl:
   style_definitions:
     - id: style_btn
       bg_color: 0x00E676
-      radius: 8
+      radius: 16
       text_color: 0x0D0D0D
-      pad_all: 6
+      pad_all: 12
     - id: style_btn_outline
       bg_color: 0x1A1A1A
-      radius: 8
+      radius: 16
       border_width: 2
       border_color: 0x00E676
       text_color: 0x00E676
-      pad_all: 6
+      pad_all: 12
     - id: style_btn_red
       bg_color: 0xFF3D00
-      radius: 8
+      radius: 16
       text_color: 0xFFFFFF
-      pad_all: 6
+      pad_all: 12
 
   pages:
     # ──────── PAGE: SPLASH ────────
@@ -1712,23 +1736,23 @@ lvgl:
       widgets:
         - label:
             text: "IRRIGATION"
-            text_font: montserrat_28
+            text_font: montserrat_48
             text_color: 0x00E676
             align: CENTER
-            y: -20
+            y: -40
         - label:
             text: "REMOTE"
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x888888
             align: CENTER
-            y: 10
+            y: 20
         - label:
             id: lbl_splash_status
             text: "Connecting..."
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x555555
             align: CENTER
-            y: 35
+            y: 70
 
     # ──────── PAGE: STATUS (Main Dashboard) ────────
     - id: page_status
@@ -1742,50 +1766,50 @@ lvgl:
       widgets:
         - label:
             text: "IRRIGATION"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x888888
             align: TOP_MID
-            y: 18
+            y: 36
 
         - label:
             id: lbl_connection
             text: "Disconnected"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0xFF1744
             align: TOP_MID
-            y: 34
+            y: 68
 
         - label:
             id: lbl_valve_status
             text: "Idle"
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x00E676
             align: TOP_MID
-            y: 52
+            y: 104
 
         - label:
             id: lbl_time_remaining
             text: "Time: --"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0xFFFFFF
-            x: 40
-            y: 74
+            x: 80
+            y: 148
 
         - label:
             id: lbl_progress
             text: "0%"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0xFFFFFF
             align: TOP_RIGHT
-            x: -40
-            y: 74
+            x: -80
+            y: 148
 
         - bar:
             id: bar_progress
             align: TOP_MID
-            y: 92
-            width: 160
-            height: 8
+            y: 184
+            width: 320
+            height: 16
             min_value: 0
             max_value: 100
             value: 0
@@ -1796,19 +1820,16 @@ lvgl:
         # Row 1: START/STOP + PAUSE
         - button:
             id: btn_start_stop
-            x: 30
-            y: 108
-            width: 88
-            height: 28
+            x: 60
+            y: 216
+            width: 176
+            height: 56
             styles: style_btn
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   id: lbl_start_stop
                   text: "START"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x0D0D0D
             on_click:
@@ -1817,18 +1838,15 @@ lvgl:
 
         - button:
             id: btn_pause
-            x: 124
-            y: 108
-            width: 88
-            height: 28
+            x: 248
+            y: 216
+            width: 176
+            height: 56
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "PAUSE"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -1838,19 +1856,16 @@ lvgl:
         # Row 2: AUTO ADV + ZONES
         - button:
             id: btn_auto_adv
-            x: 30
-            y: 142
-            width: 88
-            height: 26
+            x: 60
+            y: 284
+            width: 176
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   id: lbl_auto_adv
                   text: "AUTO: OFF"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -1859,18 +1874,15 @@ lvgl:
 
         - button:
             id: btn_goto_zones
-            x: 124
-            y: 142
-            width: 88
-            height: 26
+            x: 248
+            y: 284
+            width: 176
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "ZONES >"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -1882,18 +1894,15 @@ lvgl:
         # Row 3: SCHEDULE + SETTINGS
         - button:
             id: btn_goto_schedule
-            x: 30
-            y: 174
-            width: 88
-            height: 26
+            x: 60
+            y: 348
+            width: 176
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "SCHED >"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -1904,18 +1913,15 @@ lvgl:
 
         - button:
             id: btn_goto_settings
-            x: 124
-            y: 174
-            width: 88
-            height: 26
+            x: 248
+            y: 348
+            width: 176
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "SETUP >"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -1927,10 +1933,10 @@ lvgl:
         - label:
             id: lbl_wifi
             text: "WiFi: --"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0x444444
             align: BOTTOM_MID
-            y: -6
+            y: -12
 
     # ──────── PAGE: ZONES ────────
     - id: page_zones
@@ -1946,28 +1952,25 @@ lvgl:
         - label:
             id: lbl_zone_page_title
             text: "ZONES 1-4"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x888888
             align: TOP_MID
-            y: 18
+            y: 36
 
         # 2x2 grid of zone buttons
         - button:
             id: btn_zone_1
-            x: 24
-            y: 38
-            width: 92
-            height: 34
+            x: 48
+            y: 76
+            width: 184
+            height: 68
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 1;'
             widgets:
               - label:
                   id: lbl_zone_1
                   text: "Zone 1"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -1979,20 +1982,17 @@ lvgl:
 
         - button:
             id: btn_zone_2
-            x: 124
-            y: 38
-            width: 92
-            height: 34
+            x: 248
+            y: 76
+            width: 184
+            height: 68
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 2;'
             widgets:
               - label:
                   id: lbl_zone_2
                   text: "Zone 2"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2004,20 +2004,17 @@ lvgl:
 
         - button:
             id: btn_zone_3
-            x: 24
-            y: 80
-            width: 92
-            height: 34
+            x: 48
+            y: 160
+            width: 184
+            height: 68
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 3;'
             widgets:
               - label:
                   id: lbl_zone_3
                   text: "Zone 3"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2029,20 +2026,17 @@ lvgl:
 
         - button:
             id: btn_zone_4
-            x: 124
-            y: 80
-            width: 92
-            height: 34
+            x: 248
+            y: 160
+            width: 184
+            height: 68
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 4;'
             widgets:
               - label:
                   id: lbl_zone_4
                   text: "Zone 4"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2055,18 +2049,15 @@ lvgl:
         # Nav: PREV / NEXT
         - button:
             id: btn_zone_prev
-            x: 30
-            y: 122
-            width: 80
-            height: 24
+            x: 60
+            y: 244
+            width: 160
+            height: 48
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "< PREV"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2078,18 +2069,15 @@ lvgl:
 
         - button:
             id: btn_zone_next
-            x: 130
-            y: 122
-            width: 80
-            height: 24
+            x: 260
+            y: 244
+            width: 160
+            height: 48
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "NEXT >"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2102,18 +2090,15 @@ lvgl:
         # Bottom row: BACK / RUN NOW / TIMER
         - button:
             id: btn_zones_back
-            x: 18
-            y: 154
-            width: 60
-            height: 24
+            x: 36
+            y: 308
+            width: 120
+            height: 48
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "BACK"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2124,18 +2109,15 @@ lvgl:
 
         - button:
             id: btn_zone_run
-            x: 86
-            y: 154
-            width: 68
-            height: 24
+            x: 172
+            y: 308
+            width: 136
+            height: 48
             styles: style_btn
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "RUN"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x0D0D0D
             on_click:
@@ -2146,18 +2128,15 @@ lvgl:
 
         - button:
             id: btn_goto_dur
-            x: 162
-            y: 154
-            width: 60
-            height: 24
+            x: 324
+            y: 308
+            width: 120
+            height: 48
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "TIMER"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2181,25 +2160,22 @@ lvgl:
       widgets:
         - label:
             text: "ZONE DURATION"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x888888
             align: TOP_MID
-            y: 22
+            y: 44
 
         - button:
             id: btn_dur_zone_prev
-            x: 30
-            y: 44
-            width: 40
-            height: 28
+            x: 60
+            y: 88
+            width: 80
+            height: 56
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "<"
-                  text_font: montserrat_14
+                  text_font: montserrat_48
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2215,25 +2191,22 @@ lvgl:
         - label:
             id: lbl_dur_zone_name
             text: "Zone 1"
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x00E676
             align: TOP_MID
-            y: 48
+            y: 96
 
         - button:
             id: btn_dur_zone_next
-            x: 170
-            y: 44
-            width: 40
-            height: 28
+            x: 340
+            y: 88
+            width: 80
+            height: 56
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: ">"
-                  text_font: montserrat_14
+                  text_font: montserrat_48
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2249,17 +2222,17 @@ lvgl:
         - label:
             id: lbl_dur_value
             text: "2 min"
-            text_font: montserrat_28
+            text_font: montserrat_48
             text_color: 0xFFFFFF
             align: CENTER
-            y: -16
+            y: -32
 
         - slider:
             id: slider_duration
             align: CENTER
-            y: 20
-            width: 160
-            height: 14
+            y: 40
+            width: 320
+            height: 28
             min_value: 1
             max_value: 60
             value: 2
@@ -2268,12 +2241,9 @@ lvgl:
               bg_color: 0x00E676
             knob:
               bg_color: 0xFFFFFF
-              radius: 7
-              width: 14
-              height: 14
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
+              radius: 14
+              width: 28
+              height: 28
             on_value:
               then:
                 - lvgl.label.update:
@@ -2285,17 +2255,14 @@ lvgl:
         - button:
             id: btn_dur_set
             align: CENTER
-            y: 54
-            width: 120
-            height: 30
+            y: 108
+            width: 240
+            height: 60
             styles: style_btn
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "SET"
-                  text_font: montserrat_14
+                  text_font: montserrat_48
                   align: CENTER
                   text_color: 0x0D0D0D
             on_click:
@@ -2304,22 +2271,18 @@ lvgl:
                     id: send_duration_set
                     zone_num: !lambda 'return id(dur_selected_zone);'
                     duration_val: !lambda 'return lv_slider_get_value(id(slider_duration));'
-                - rtttl.play: "c:d=16,o=5,b=200:c,e"
 
         - button:
             id: btn_dur_back
             align: BOTTOM_MID
-            y: -28
-            width: 80
-            height: 26
+            y: -56
+            width: 160
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "< BACK"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2341,33 +2304,30 @@ lvgl:
       widgets:
         - label:
             text: "SCHEDULE"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x888888
             align: TOP_MID
-            y: 18
+            y: 36
 
         # Enable toggle
         - button:
             id: btn_sched_toggle
-            x: 40
-            y: 36
-            width: 100
-            height: 24
+            x: 80
+            y: 72
+            width: 200
+            height: 48
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "Enabled:"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: LEFT_MID
                   x: 4
                   text_color: 0x888888
               - label:
                   id: lbl_sched_enabled
                   text: "OFF"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: RIGHT_MID
                   x: -4
                   text_color: 0xFF3D00
@@ -2381,19 +2341,16 @@ lvgl:
         # Day of week buttons (7 in a row)
         - button:
             id: btn_day_mon
-            x: 22
-            y: 66
-            width: 26
-            height: 24
-            radius: 4
+            x: 44
+            y: 132
+            width: 52
+            height: 48
+            radius: 8
             bg_color: 0x333333
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "M"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2406,19 +2363,16 @@ lvgl:
 
         - button:
             id: btn_day_tue
-            x: 52
-            y: 66
-            width: 26
-            height: 24
-            radius: 4
+            x: 104
+            y: 132
+            width: 52
+            height: 48
+            radius: 8
             bg_color: 0x333333
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "T"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2431,19 +2385,16 @@ lvgl:
 
         - button:
             id: btn_day_wed
-            x: 82
-            y: 66
-            width: 26
-            height: 24
-            radius: 4
+            x: 164
+            y: 132
+            width: 52
+            height: 48
+            radius: 8
             bg_color: 0x333333
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "W"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2456,19 +2407,16 @@ lvgl:
 
         - button:
             id: btn_day_thu
-            x: 112
-            y: 66
-            width: 26
-            height: 24
-            radius: 4
+            x: 224
+            y: 132
+            width: 52
+            height: 48
+            radius: 8
             bg_color: 0x333333
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "T"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2481,19 +2429,16 @@ lvgl:
 
         - button:
             id: btn_day_fri
-            x: 142
-            y: 66
-            width: 26
-            height: 24
-            radius: 4
+            x: 284
+            y: 132
+            width: 52
+            height: 48
+            radius: 8
             bg_color: 0x333333
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "F"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2506,19 +2451,16 @@ lvgl:
 
         - button:
             id: btn_day_sat
-            x: 172
-            y: 66
-            width: 26
-            height: 24
-            radius: 4
+            x: 344
+            y: 132
+            width: 52
+            height: 48
+            radius: 8
             bg_color: 0x333333
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "S"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2531,19 +2473,16 @@ lvgl:
 
         - button:
             id: btn_day_sun
-            x: 202
-            y: 66
-            width: 26
-            height: 24
-            radius: 4
+            x: 404
+            y: 132
+            width: 52
+            height: 48
+            radius: 8
             bg_color: 0x333333
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "S"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2558,47 +2497,44 @@ lvgl:
         - label:
             id: lbl_sched_t1
             text: "1: --:--"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0xFFFFFF
-            x: 30
-            y: 98
+            x: 60
+            y: 196
         - label:
             id: lbl_sched_t2
             text: "2: --:--"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0xFFFFFF
-            x: 130
-            y: 98
+            x: 260
+            y: 196
         - label:
             id: lbl_sched_t3
             text: "3: --:--"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x888888
-            x: 30
-            y: 118
+            x: 60
+            y: 236
         - label:
             id: lbl_sched_t4
             text: "4: --:--"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x888888
-            x: 130
-            y: 118
+            x: 260
+            y: 236
 
         # Bottom row
         - button:
             id: btn_goto_time_edit
-            x: 30
-            y: 146
-            width: 100
-            height: 26
+            x: 60
+            y: 292
+            width: 200
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "EDIT TIMES"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2609,18 +2545,15 @@ lvgl:
 
         - button:
             id: btn_sched_back
-            x: 140
-            y: 146
-            width: 80
-            height: 26
+            x: 280
+            y: 292
+            width: 160
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "< BACK"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2645,26 +2578,23 @@ lvgl:
         - label:
             id: lbl_time_edit_title
             text: "START TIME 1"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x888888
             align: TOP_MID
-            y: 22
+            y: 44
 
         # Slot selector
         - button:
             id: btn_slot_prev
-            x: 40
-            y: 40
-            width: 40
-            height: 26
+            x: 80
+            y: 80
+            width: 80
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "<"
-                  text_font: montserrat_14
+                  text_font: montserrat_48
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2680,25 +2610,22 @@ lvgl:
         - label:
             id: lbl_time_edit_slot
             text: "Slot 1"
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x00E676
             align: TOP_MID
-            y: 44
+            y: 88
 
         - button:
             id: btn_slot_next
-            x: 160
-            y: 40
-            width: 40
-            height: 26
+            x: 320
+            y: 80
+            width: 80
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: ">"
-                  text_font: montserrat_14
+                  text_font: montserrat_48
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2715,24 +2642,24 @@ lvgl:
         - label:
             id: lbl_time_display
             text: "06:00"
-            text_font: montserrat_28
+            text_font: montserrat_48
             text_color: 0xFFFFFF
             align: CENTER
-            y: -22
+            y: -44
 
         # Hour slider
         - label:
             text: "Hr"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0x888888
-            x: 24
-            y: 108
+            x: 48
+            y: 216
         - slider:
             id: slider_hour
-            x: 46
-            y: 108
-            width: 140
-            height: 12
+            x: 92
+            y: 216
+            width: 280
+            height: 24
             min_value: 0
             max_value: 23
             value: 6
@@ -2741,10 +2668,7 @@ lvgl:
               bg_color: 0x00E676
             knob:
               bg_color: 0xFFFFFF
-              radius: 6
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
+              radius: 12
             on_value:
               then:
                 - lambda: |-
@@ -2756,24 +2680,24 @@ lvgl:
         - label:
             id: lbl_hour_val
             text: "6"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0x00E676
-            x: 194
-            y: 108
+            x: 388
+            y: 216
 
         # Minute slider
         - label:
             text: "Mn"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0x888888
-            x: 24
-            y: 128
+            x: 48
+            y: 256
         - slider:
             id: slider_minute
-            x: 46
-            y: 128
-            width: 140
-            height: 12
+            x: 92
+            y: 256
+            width: 280
+            height: 24
             min_value: 0
             max_value: 59
             value: 0
@@ -2782,10 +2706,7 @@ lvgl:
               bg_color: 0x00E676
             knob:
               bg_color: 0xFFFFFF
-              radius: 6
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
+              radius: 12
             on_value:
               then:
                 - lambda: |-
@@ -2797,26 +2718,23 @@ lvgl:
         - label:
             id: lbl_min_val
             text: "0"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0x00E676
-            x: 194
-            y: 128
+            x: 388
+            y: 256
 
         # Bottom buttons: SET / CLEAR / BACK
         - button:
             id: btn_time_set
-            x: 18
-            y: 154
-            width: 64
-            height: 26
+            x: 36
+            y: 308
+            width: 128
+            height: 52
             styles: style_btn
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "SET"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x0D0D0D
             on_click:
@@ -2842,22 +2760,18 @@ lvgl:
                       char buf[8];
                       snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
                       return std::string(buf);
-                - rtttl.play: "c:d=16,o=5,b=200:c,e"
 
         - button:
             id: btn_time_clear
-            x: 88
-            y: 154
-            width: 64
-            height: 26
+            x: 176
+            y: 308
+            width: 128
+            height: 52
             styles: style_btn_red
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "CLEAR"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0xFFFFFF
             on_click:
@@ -2875,18 +2789,15 @@ lvgl:
 
         - button:
             id: btn_time_back
-            x: 158
-            y: 154
-            width: 64
-            height: 26
+            x: 316
+            y: 308
+            width: 128
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "BACK"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2921,34 +2832,31 @@ lvgl:
       widgets:
         - label:
             text: "SETTINGS"
-            text_font: montserrat_12
-            text_color: 0x888888
-            align: TOP_MID
-            y: 18
-
-        - label:
-            text: "Controller IP:"
-            text_font: montserrat_10
+            text_font: montserrat_24
             text_color: 0x888888
             align: TOP_MID
             y: 36
 
+        - label:
+            text: "Controller IP:"
+            text_font: montserrat_20
+            text_color: 0x888888
+            align: TOP_MID
+            y: 72
+
         # IP octet buttons
         - button:
             id: btn_ip_octet_1
-            x: 18
-            y: 52
-            width: 48
-            height: 26
+            x: 36
+            y: 104
+            width: 96
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   id: lbl_ip_o1
                   text: "192"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2966,26 +2874,23 @@ lvgl:
 
         - label:
             text: "."
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x888888
-            x: 69
-            y: 56
+            x: 138
+            y: 112
 
         - button:
             id: btn_ip_octet_2
-            x: 74
-            y: 52
-            width: 48
-            height: 26
+            x: 148
+            y: 104
+            width: 96
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   id: lbl_ip_o2
                   text: "168"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -3003,26 +2908,23 @@ lvgl:
 
         - label:
             text: "."
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x888888
-            x: 125
-            y: 56
+            x: 250
+            y: 112
 
         - button:
             id: btn_ip_octet_3
-            x: 130
-            y: 52
-            width: 42
-            height: 26
+            x: 260
+            y: 104
+            width: 84
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   id: lbl_ip_o3
                   text: "1"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -3040,26 +2942,23 @@ lvgl:
 
         - label:
             text: "."
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x888888
-            x: 175
-            y: 56
+            x: 350
+            y: 112
 
         - button:
             id: btn_ip_octet_4
-            x: 180
-            y: 52
-            width: 42
-            height: 26
+            x: 360
+            y: 104
+            width: 84
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   id: lbl_ip_o4
                   text: "100"
-                  text_font: montserrat_12
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -3078,17 +2977,17 @@ lvgl:
         # Zone count
         - label:
             text: "Zones:"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0x888888
-            x: 30
-            y: 90
+            x: 60
+            y: 180
 
         - slider:
             id: slider_zone_count
-            x: 74
-            y: 92
-            width: 100
-            height: 12
+            x: 148
+            y: 184
+            width: 200
+            height: 24
             min_value: 1
             max_value: 32
             value: 8
@@ -3097,10 +2996,7 @@ lvgl:
               bg_color: 0x00E676
             knob:
               bg_color: 0xFFFFFF
-              radius: 6
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
+              radius: 12
             on_value:
               then:
                 - lvgl.label.update:
@@ -3112,26 +3008,23 @@ lvgl:
         - label:
             id: lbl_zone_count_val
             text: "8"
-            text_font: montserrat_12
+            text_font: montserrat_24
             text_color: 0x00E676
-            x: 184
-            y: 88
+            x: 368
+            y: 176
 
         # Auto detect button
         - button:
             id: btn_auto_detect
             align: TOP_MID
-            y: 112
-            width: 140
-            height: 26
+            y: 224
+            width: 280
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "AUTO DETECT"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -3142,40 +3035,33 @@ lvgl:
         - button:
             id: btn_settings_save
             align: CENTER
-            y: 36
-            width: 120
-            height: 30
+            y: 72
+            width: 240
+            height: 60
             styles: style_btn
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "SAVE"
-                  text_font: montserrat_14
+                  text_font: montserrat_48
                   align: CENTER
                   text_color: 0x0D0D0D
             on_click:
               then:
                 - lambda: |-
                     id(zone_count) = lv_slider_get_value(id(slider_zone_count));
-                - rtttl.play: "c:d=16,o=5,b=200:c,e"
 
         # Back button
         - button:
             id: btn_settings_back
             align: BOTTOM_MID
-            y: -28
-            width: 80
-            height: 26
+            y: -56
+            width: 160
+            height: 52
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "< BACK"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -3197,25 +3083,25 @@ lvgl:
         - label:
             id: lbl_ip_edit_title
             text: "Octet 1"
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x888888
             align: TOP_MID
-            y: 30
+            y: 60
 
         - label:
             id: lbl_ip_edit_val
             text: "192"
-            text_font: montserrat_28
+            text_font: montserrat_48
             text_color: 0x00E676
             align: CENTER
-            y: -20
+            y: -40
 
         - slider:
             id: slider_ip_val
             align: CENTER
-            y: 16
-            width: 160
-            height: 14
+            y: 32
+            width: 320
+            height: 28
             min_value: 0
             max_value: 255
             value: 192
@@ -3224,12 +3110,9 @@ lvgl:
               bg_color: 0x00E676
             knob:
               bg_color: 0xFFFFFF
-              radius: 7
-              width: 14
-              height: 14
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
+              radius: 14
+              width: 28
+              height: 28
             on_value:
               then:
                 - lvgl.label.update:
@@ -3241,18 +3124,15 @@ lvgl:
         - button:
             id: btn_ip_edit_ok
             align: BOTTOM_MID
-            x: -50
-            y: -30
-            width: 80
-            height: 30
+            x: -100
+            y: -60
+            width: 160
+            height: 60
             styles: style_btn
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "OK"
-                  text_font: montserrat_14
+                  text_font: montserrat_48
                   align: CENTER
                   text_color: 0x0D0D0D
             on_click:
@@ -3271,18 +3151,15 @@ lvgl:
         - button:
             id: btn_ip_edit_cancel
             align: BOTTOM_MID
-            x: 50
-            y: -30
-            width: 80
-            height: 30
+            x: 100
+            y: -60
+            width: 160
+            height: 60
             styles: style_btn_outline
-            on_focus:
-              then:
-                - rtttl.play: "c:d=32,o=6,b=200:c"
             widgets:
               - label:
                   text: "CANCEL"
-                  text_font: montserrat_10
+                  text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -3299,10 +3176,10 @@ lvgl:
         - label:
             id: lbl_big_zone_title
             text: "ZONE"
-            text_font: montserrat_14
+            text_font: montserrat_48
             text_color: 0x888888
             align: TOP_MID
-            y: 40
+            y: 80
 
         - label:
             id: lbl_big_zone
@@ -3310,19 +3187,19 @@ lvgl:
             text_font: montserrat_48
             text_color: 0x00E676
             align: CENTER
-            y: -20
+            y: -40
 
         - label:
             id: lbl_big_remaining
             text: "--"
-            text_font: montserrat_28
+            text_font: montserrat_48
             text_color: 0x2979FF
             align: CENTER
-            y: 40
+            y: 80
 
         - label:
             text: "tap to exit"
-            text_font: montserrat_10
+            text_font: montserrat_20
             text_color: 0x444444
             align: BOTTOM_MID
-            y: -20
+            y: -40
