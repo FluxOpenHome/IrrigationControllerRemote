@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.12.0 — Local countdown timer, delta latency tracking
+# v2.14.0 — Fix active zone page not showing after boot sync
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.12.0"
+  software_version: "2.14.0"
 
 esphome:
   name: "${name}"
@@ -120,9 +120,15 @@ esphome:
       - wait_until:
           condition:
             lambda: 'return !id(sync_needed_entity).state;'
-      - lvgl.page.show:
-          id: page_status
-          animation: NONE
+      - lambda: |-
+          // After sync, show active zone page if zones are already running
+          if (id(zone_states) != 0) {
+            id(zone_active_showing) = true;
+            lv_scr_load(id(page_active_zone)->obj);
+          } else {
+            id(zone_active_showing) = false;
+            lv_scr_load(id(page_status)->obj);
+          }
 
 esp32:
   variant: esp32s3
@@ -631,6 +637,52 @@ text:
     max_length: 16
     mode: text
     initial_value: "--"
+    on_value:
+      then:
+        - lambda: |-
+            // Parse "Xh Ym Zs", "Xm Ys", or "Xs" into total seconds
+            // and start the local countdown on the FIRST value received per run
+            if (x == "--" || x == "0m 0s" || x.empty()) return;
+            int hours = 0, mins = 0, secs = 0;
+            const char* p = x.c_str();
+            while (*p) {
+              if (isdigit(*p)) {
+                int val = 0;
+                while (isdigit(*p)) { val = val * 10 + (*p - '0'); p++; }
+                if (*p == 'h') { hours = val; p++; }
+                else if (*p == 'm') { mins = val; p++; }
+                else if (*p == 's') { secs = val; p++; }
+              } else {
+                p++;
+              }
+            }
+            int total_secs = hours * 3600 + mins * 60 + secs;
+            if (total_secs <= 0) return;
+            // Only start countdown if not already running (first push starts it)
+            if (!id(countdown_running)) {
+              // Apply last delta correction
+              std::string last_d = id(last_delta_latency_entity).state;
+              if (!last_d.empty() && last_d != "0") {
+                int correction = atoi(last_d.c_str());
+                total_secs -= correction;
+                if (total_secs < 0) total_secs = 0;
+              }
+              id(countdown_total) = total_secs;
+              id(countdown_remaining) = total_secs;
+              id(countdown_running) = true;
+              // Update display immediately
+              char buf[16];
+              int h = total_secs / 3600;
+              int m = (total_secs % 3600) / 60;
+              int s = total_secs % 60;
+              if (h > 0) {
+                snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, s);
+              } else {
+                snprintf(buf, sizeof(buf), "%d:%02d", m, s);
+              }
+              lv_label_set_text(id(lbl_big_remaining), buf);
+              lv_bar_set_value(id(bar_active_progress), 100, LV_ANIM_OFF);
+            }
 
   - platform: template
     name: "Active Zone"
