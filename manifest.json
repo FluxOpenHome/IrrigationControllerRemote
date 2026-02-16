@@ -1,14 +1,14 @@
 {
   "name": "Irrigation Remote",
-  "version": "2.14.0",
+  "version": "2.16.0",
   "builds": [
     {
       "chipFamily": "ESP32-S3",
       "ota": {
-        "md5": "406c4468ebff09925b27e7cda5b908b2",
-        "path": "https://github.com/FluxOpenHome/IrrigationControllerRemote/releases/download/v2.14.0/irrigation-remote-2.14.0.ota.bin",
-        "release_url": "https://github.com/FluxOpenHome/IrrigationControllerRemote/releases/tag/v2.14.0",
-        "summary": "Update 2.14.0"
+        "md5": "d6c2eac973cf4e498802759dc0ab7143",
+        "path": "https://github.com/FluxOpenHome/IrrigationControllerRemote/releases/download/v2.16.0/irrigation-remote-2.16.0.ota.bin",
+        "release_url": "https://github.com/FluxOpenHome/IrrigationControllerRemote/releases/tag/v2.16.0",
+        "summary": "Update 2.16.0"
       }
     }
   ]
