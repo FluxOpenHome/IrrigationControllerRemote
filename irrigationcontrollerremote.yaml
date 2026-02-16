@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.1.0 — UI redesign: simplified status, dial-based time editor, active zone page
+# v2.2.0 — Logo, day text fix, time editor fix, active zone auto-show
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.1.0"
+  software_version: "2.2.0"
 
 esphome:
   name: "${name}"
@@ -135,17 +135,9 @@ logger:
 api:
   id: api_server
   on_client_connected:
-    - lvgl.label.update:
-        id: lbl_connection
-        text: "HA Connected"
-    - lambda: |-
-        lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0x00E676), 0);
+    - lambda: 'id(wifi_connected) = true;'
   on_client_disconnected:
-    - lvgl.label.update:
-        id: lbl_connection
-        text: "HA Disconnected"
-    - lambda: |-
-        lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0xFF1744), 0);
+    - lambda: 'id(wifi_connected) = false;'
 
 ota:
   - id: ota_component
@@ -256,6 +248,17 @@ light:
     output: lcd_backlight_output
     restore_mode: RESTORE_DEFAULT_ON
     default_transition_length: 0s
+
+# ──────────────────────────────────────────────
+# Images
+# ──────────────────────────────────────────────
+
+image:
+  - file: "logo_white_120.png"
+    id: img_logo
+    resize: 100x32
+    type: BINARY
+    transparency: chroma_key
 
 # ──────────────────────────────────────────────
 # Globals
@@ -1747,12 +1750,18 @@ script:
           // Update day buttons
           lv_obj_t* day_btns[] = {id(btn_day_mon), id(btn_day_tue), id(btn_day_wed),
                                    id(btn_day_thu), id(btn_day_fri), id(btn_day_sat), id(btn_day_sun)};
+          lv_obj_t* day_lbls[] = {lv_obj_get_child(day_btns[0], 0), lv_obj_get_child(day_btns[1], 0),
+                                   lv_obj_get_child(day_btns[2], 0), lv_obj_get_child(day_btns[3], 0),
+                                   lv_obj_get_child(day_btns[4], 0), lv_obj_get_child(day_btns[5], 0),
+                                   lv_obj_get_child(day_btns[6], 0)};
           for (int i = 0; i < 7; i++) {
             bool on = (id(sched_days) >> i) & 1;
             if (on) {
               lv_obj_set_style_bg_color(day_btns[i], lv_color_hex(0x00E676), 0);
+              lv_obj_set_style_text_color(day_lbls[i], lv_color_hex(0x000000), 0);
             } else {
               lv_obj_set_style_bg_color(day_btns[i], lv_color_hex(0x333333), 0);
+              lv_obj_set_style_text_color(day_lbls[i], lv_color_hex(0xFFFFFF), 0);
             }
           }
           // Update time labels
@@ -1886,25 +1895,17 @@ lvgl:
       bg_color: 0x0D0D0D
       bg_opa: COVER
       widgets:
-        - label:
-            text: "IRRIGATION"
-            text_font: montserrat_28
-            text_color: 0x00E676
+        - image:
+            src: img_logo
             align: CENTER
-            y: -20
-        - label:
-            text: "REMOTE"
-            text_font: montserrat_14
-            text_color: 0x888888
-            align: CENTER
-            y: 10
+            y: -16
         - label:
             id: lbl_splash_status
             text: "Connecting..."
             text_font: montserrat_12
             text_color: 0x555555
             align: CENTER
-            y: 35
+            y: 24
 
     # ──────── PAGE: STATUS (Main Dashboard - Redesigned) ────────
     - id: page_status
@@ -1916,20 +1917,10 @@ lvgl:
               if (id(enc_indev) != nullptr)
                 lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_status));
       widgets:
-        - label:
-            text: "IRRIGATION"
-            text_font: montserrat_12
-            text_color: 0x888888
-            align: TOP_MID
-            y: 18
-
-        - label:
-            id: lbl_connection
-            text: "HA Disconnected"
-            text_font: montserrat_10
-            text_color: 0xFF1744
-            align: TOP_MID
-            y: 34
+        - image:
+            src: img_logo
+            align: CENTER
+            y: -54
 
         # Current time from HA - big centered display
         - label:
@@ -1938,7 +1929,7 @@ lvgl:
             text_font: montserrat_28
             text_color: 0xFFFFFF
             align: CENTER
-            y: -24
+            y: -16
 
         # Valve status below time
         - label:
