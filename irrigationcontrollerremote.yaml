@@ -7,7 +7,7 @@
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.2.0"
+  software_version: "2.4.0"
 
 esphome:
   name: "${name}"
@@ -257,8 +257,7 @@ image:
   - file: "logo_white_120.png"
     id: img_logo
     resize: 100x32
-    type: BINARY
-    transparency: chroma_key
+    type: RGB
 
 # ──────────────────────────────────────────────
 # Globals
