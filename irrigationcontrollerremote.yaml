@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.0.0 — Pure HA mirror entity architecture (no HTTP)
+# v2.1.0 — UI redesign: simplified status, dial-based time editor, active zone page
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.0.0"
+  software_version: "2.1.0"
 
 esphome:
   name: "${name}"
@@ -396,6 +396,12 @@ globals:
     restore_value: yes
     initial_value: 'true'
 
+  # Time edit returning flag (skip re-parse when coming back from hour/minute sub-pages)
+  - id: time_edit_returning
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
   # Active zone page tracking
   - id: zone_active_showing
     type: bool
@@ -481,11 +487,7 @@ binary_sensor:
     on_click:
       then:
         - lambda: |-
-            int mode = id(time_edit_mode);
-            if (mode == 1 || mode == 2) {
-              id(time_edit_mode) = 0;
-              lv_scr_load(id(page_time_edit)->obj);
-            }
+            // No-op: encoder button presses are handled by LVGL focus groups
 
   - platform: template
     name: "WiFi Connected"
@@ -1712,6 +1714,23 @@ script:
             lv_obj_clear_flag(id(btn_zone_prev), LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(id(btn_zone_next), LV_OBJ_FLAG_HIDDEN);
           }
+          // Auto-show/hide active zone page based on zone states
+          if (id(zone_states) != 0 && !id(zone_active_showing)) {
+            // Find first active zone number for display
+            for (int i = 0; i < 32; i++) {
+              if ((id(zone_states) >> i) & 1) {
+                char zn[4];
+                snprintf(zn, sizeof(zn), "%d", i + 1);
+                lv_label_set_text(id(lbl_big_zone), zn);
+                break;
+              }
+            }
+            id(zone_active_showing) = true;
+            lv_scr_load(id(page_active_zone)->obj);
+          } else if (id(zone_states) == 0 && id(zone_active_showing)) {
+            id(zone_active_showing) = false;
+            lv_scr_load(id(page_status)->obj);
+          }
 
   # Helper: refresh schedule page
   - id: refresh_schedule_page
@@ -2589,21 +2608,23 @@ lvgl:
               char buf[24];
               snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
               lv_label_set_text(id(lbl_time_edit_title), buf);
-              // Parse current time from sched_time global
-              std::string current;
-              int slot = id(time_edit_slot);
-              if (slot == 1) current = id(sched_time_1);
-              else if (slot == 2) current = id(sched_time_2);
-              else if (slot == 3) current = id(sched_time_3);
-              else current = id(sched_time_4);
-              // Parse HH:MM
-              if (current.length() >= 5 && current[2] == ':') {
-                id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
-                id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
-              } else {
-                id(time_edit_hour) = 6;
-                id(time_edit_minute) = 0;
+              // Only parse stored time on fresh entry, not when returning from hour/minute sub-pages
+              if (!id(time_edit_returning)) {
+                std::string current;
+                int slot = id(time_edit_slot);
+                if (slot == 1) current = id(sched_time_1);
+                else if (slot == 2) current = id(sched_time_2);
+                else if (slot == 3) current = id(sched_time_3);
+                else current = id(sched_time_4);
+                if (current.length() >= 5 && current[2] == ':') {
+                  id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
+                  id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
+                } else {
+                  id(time_edit_hour) = 6;
+                  id(time_edit_minute) = 0;
+                }
               }
+              id(time_edit_returning) = false;
           - script.execute: update_time_display
       widgets:
         - label:
@@ -2796,6 +2817,8 @@ lvgl:
                     else if (slot == 2) { id(sched_time_2) = ts; auto call = id(sched_time_2_entity).make_call(); call.set_value(ts); call.perform(); }
                     else if (slot == 3) { id(sched_time_3) = ts; auto call = id(sched_time_3_entity).make_call(); call.set_value(ts); call.perform(); }
                     else if (slot == 4) { id(sched_time_4) = ts; auto call = id(sched_time_4_entity).make_call(); call.set_value(ts); call.perform(); }
+                    ESP_LOGI("time_edit", "SET time slot %d to %s", slot, ts.c_str());
+                - script.execute: update_time_display
 
         - button:
             id: btn_time_clear
@@ -2900,8 +2923,9 @@ lvgl:
                   text_color: 0x0D0D0D
             on_click:
               then:
-                - lambda: 'id(time_edit_mode) = 0;'
-                - script.execute: update_time_display
+                - lambda: |-
+                    id(time_edit_mode) = 0;
+                    id(time_edit_returning) = true;
                 - lvgl.page.show:
                     id: page_time_edit
                     animation: NONE
@@ -2957,8 +2981,9 @@ lvgl:
                   text_color: 0x0D0D0D
             on_click:
               then:
-                - lambda: 'id(time_edit_mode) = 0;'
-                - script.execute: update_time_display
+                - lambda: |-
+                    id(time_edit_mode) = 0;
+                    id(time_edit_returning) = true;
                 - lvgl.page.show:
                     id: page_time_edit
                     animation: NONE
@@ -3094,4 +3119,21 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
+                - lambda: |-
+                    // Turn off all active zone switches
+                    esphome::template_::TemplateSwitch* sw[] = {
+                      id(zone_1_switch), id(zone_2_switch), id(zone_3_switch), id(zone_4_switch),
+                      id(zone_5_switch), id(zone_6_switch), id(zone_7_switch), id(zone_8_switch),
+                      id(zone_9_switch), id(zone_10_switch), id(zone_11_switch), id(zone_12_switch),
+                      id(zone_13_switch), id(zone_14_switch), id(zone_15_switch), id(zone_16_switch),
+                      id(zone_17_switch), id(zone_18_switch), id(zone_19_switch), id(zone_20_switch),
+                      id(zone_21_switch), id(zone_22_switch), id(zone_23_switch), id(zone_24_switch),
+                      id(zone_25_switch), id(zone_26_switch), id(zone_27_switch), id(zone_28_switch),
+                      id(zone_29_switch), id(zone_30_switch), id(zone_31_switch), id(zone_32_switch)
+                    };
+                    for (int i = 0; i < 32; i++) {
+                      if ((id(zone_states) >> i) & 1) {
+                        sw[i]->turn_off();
+                      }
+                    }
                 - switch.turn_off: main_switch_entity

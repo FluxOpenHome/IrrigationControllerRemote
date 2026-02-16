@@ -31,11 +31,11 @@ esphome:
           lv_group_t *g_sched    = lv_group_create();
           lv_group_t *g_time_ed  = lv_group_create();
           lv_group_t *g_settings = lv_group_create();
+          lv_group_t *g_hour_sel = lv_group_create();
+          lv_group_t *g_minute_sel = lv_group_create();
+          lv_group_t *g_active_zone = lv_group_create();
 
           // page_status
-          lv_group_add_obj(g_status, id(btn_start_stop));
-          lv_group_add_obj(g_status, id(btn_pause));
-          lv_group_add_obj(g_status, id(btn_auto_adv));
           lv_group_add_obj(g_status, id(btn_goto_zones));
           lv_group_add_obj(g_status, id(btn_goto_schedule));
           lv_group_add_obj(g_status, id(btn_goto_settings));
@@ -47,7 +47,6 @@ esphome:
           lv_group_add_obj(g_zones, id(btn_zone_4));
           lv_group_add_obj(g_zones, id(btn_zone_prev));
           lv_group_add_obj(g_zones, id(btn_zone_next));
-          lv_group_add_obj(g_zones, id(btn_zone_run));
           lv_group_add_obj(g_zones, id(btn_goto_dur));
           lv_group_add_obj(g_zones, id(btn_zones_back));
 
@@ -73,21 +72,25 @@ esphome:
           // page_time_edit
           lv_group_add_obj(g_time_ed, id(btn_slot_prev));
           lv_group_add_obj(g_time_ed, id(btn_slot_next));
-          lv_group_add_obj(g_time_ed, id(btn_hour_up));
-          lv_group_add_obj(g_time_ed, id(btn_hour_down));
-          lv_group_add_obj(g_time_ed, id(btn_min_up));
-          lv_group_add_obj(g_time_ed, id(btn_min_down));
+          lv_group_add_obj(g_time_ed, id(btn_hour_select));
+          lv_group_add_obj(g_time_ed, id(btn_minute_select));
           lv_group_add_obj(g_time_ed, id(btn_ampm));
           lv_group_add_obj(g_time_ed, id(btn_time_set));
           lv_group_add_obj(g_time_ed, id(btn_time_clear));
           lv_group_add_obj(g_time_ed, id(btn_time_back));
 
           // page_settings
-          lv_group_add_obj(g_settings, id(slider_zone_count));
-          lv_group_add_obj(g_settings, id(btn_auto_detect));
           lv_group_add_obj(g_settings, id(btn_12hr_toggle));
-          lv_group_add_obj(g_settings, id(btn_settings_save));
           lv_group_add_obj(g_settings, id(btn_settings_back));
+
+          // page_hour_select
+          lv_group_add_obj(g_hour_sel, id(btn_hour_confirm));
+
+          // page_minute_select
+          lv_group_add_obj(g_minute_sel, id(btn_minute_confirm));
+
+          // page_active_zone
+          lv_group_add_obj(g_active_zone, id(btn_active_stop));
 
           // Store group pointers
           id(grp_status)    = (void*)g_status;
@@ -96,6 +99,9 @@ esphome:
           id(grp_schedule)  = (void*)g_sched;
           id(grp_time_edit) = (void*)g_time_ed;
           id(grp_settings)  = (void*)g_settings;
+          id(grp_hour_sel)  = (void*)g_hour_sel;
+          id(grp_minute_sel) = (void*)g_minute_sel;
+          id(grp_active_zone) = (void*)g_active_zone;
 
           // Find encoder indev and assign initial group
           lv_indev_t *enc = nullptr;
@@ -200,6 +206,14 @@ dashboard_import:
 
 web_server:
   port: 80
+
+# ──────────────────────────────────────────────
+# HA Time Component
+# ──────────────────────────────────────────────
+
+time:
+  - platform: homeassistant
+    id: ha_time
 
 # ──────────────────────────────────────────────
 # VIEWE 480x480 Hardware
@@ -327,6 +341,18 @@ globals:
     type: void*
     restore_value: no
     initial_value: 'nullptr'
+  - id: grp_hour_sel
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_minute_sel
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
+  - id: grp_active_zone
+    type: void*
+    restore_value: no
+    initial_value: 'nullptr'
 
   # WiFi state
   - id: wifi_connected
@@ -402,6 +428,18 @@ globals:
     restore_value: no
     initial_value: '0'
 
+  # Time edit mode (0=normal, 1=editing_hour, 2=editing_minute)
+  - id: time_edit_mode
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+  # Encoder last value for direction tracking
+  - id: encoder_last_value
+    type: int
+    restore_value: no
+    initial_value: '0'
+
   # 12-hour format flag
   - id: use_12hour
     type: bool
@@ -434,6 +472,45 @@ sensor:
         input: true
         pullup: true
       allow_other_uses: true
+    on_value:
+      then:
+        - lambda: |-
+            int cur = (int)x;
+            int last = id(encoder_last_value);
+            int diff = cur - last;
+            id(encoder_last_value) = cur;
+            if (diff == 0) return;
+            int mode = id(time_edit_mode);
+            if (mode == 1) {
+              // Editing hour
+              if (diff > 0) {
+                id(time_edit_hour) = (id(time_edit_hour) + 1) % 24;
+              } else {
+                id(time_edit_hour) = (id(time_edit_hour) + 23) % 24;
+              }
+              // Update hour display
+              char buf[8];
+              int h = id(time_edit_hour);
+              if (id(use_12hour)) {
+                int h12 = h % 12;
+                if (h12 == 0) h12 = 12;
+                snprintf(buf, sizeof(buf), "%d", h12);
+              } else {
+                snprintf(buf, sizeof(buf), "%02d", h);
+              }
+              lv_label_set_text(id(lbl_hour_value), buf);
+            } else if (mode == 2) {
+              // Editing minute
+              if (diff > 0) {
+                id(time_edit_minute) = (id(time_edit_minute) + 1) % 60;
+              } else {
+                id(time_edit_minute) = (id(time_edit_minute) + 59) % 60;
+              }
+              // Update minute display
+              char buf[8];
+              snprintf(buf, sizeof(buf), "%02d", id(time_edit_minute));
+              lv_label_set_text(id(lbl_minute_value), buf);
+            }
 
   - platform: wifi_signal
     name: "WiFi Signal"
@@ -455,6 +532,14 @@ binary_sensor:
       inverted: true
       allow_other_uses: true
       ignore_strapping_warning: true
+    on_click:
+      then:
+        - lambda: |-
+            int mode = id(time_edit_mode);
+            if (mode == 1 || mode == 2) {
+              id(time_edit_mode) = 0;
+              lv_scr_load(id(page_time_edit)->obj);
+            }
 
   - platform: template
     name: "WiFi Connected"
@@ -501,8 +586,10 @@ text:
       then:
         - lambda: |-
             lv_label_set_text(id(lbl_valve_status), x.c_str());
+            // Color based on status
             if (x.find("Active") != std::string::npos) {
               lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
+              // Extract zone number for active zone display
               std::string zone_num = "--";
               for (size_t i = 0; i < x.find("Active"); i++) {
                 if (isdigit(x[i])) {
@@ -513,6 +600,11 @@ text:
                 }
               }
               lv_label_set_text(id(lbl_big_zone), zone_num.c_str());
+              // Auto-show active zone page
+              if (!id(zone_active_showing)) {
+                id(zone_active_showing) = true;
+                lv_scr_load(id(page_active_zone)->obj);
+              }
             } else if (x == "Idle" || x == "System Ready") {
               lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x00E676), 0);
               if (id(zone_active_showing)) {
@@ -539,9 +631,6 @@ text:
     on_value:
       then:
         - lambda: |-
-            char buf[24];
-            snprintf(buf, sizeof(buf), "Time: %s", x.c_str());
-            lv_label_set_text(id(lbl_time_remaining), buf);
             lv_label_set_text(id(lbl_big_remaining), x.c_str());
 
   - platform: template
@@ -556,9 +645,8 @@ text:
     on_value:
       then:
         - lambda: |-
-            lv_label_set_text(id(lbl_progress), x.c_str());
             int pct = atoi(x.c_str());
-            lv_bar_set_value(id(bar_progress), pct, LV_ANIM_ON);
+            lv_bar_set_value(id(bar_active_progress), pct, LV_ANIM_ON);
 
   - platform: template
     name: "Active Zone"
@@ -654,10 +742,6 @@ number:
     set_action:
       - lambda: |-
           id(zone_count) = (int)x;
-          lv_slider_set_value(id(slider_zone_count), (int)x, LV_ANIM_ON);
-          char buf[4];
-          snprintf(buf, sizeof(buf), "%d", (int)x);
-          lv_label_set_text(id(lbl_zone_count_val), buf);
 
   # Zone durations (1-32)
   - platform: template
@@ -1014,7 +1098,7 @@ number:
     initial_value: 2
 
 # ──────────────────────────────────────────────
-# Template Switches (identical logic to small variant)
+# Template Switches
 # ──────────────────────────────────────────────
 
 switch:
@@ -1024,14 +1108,6 @@ switch:
     icon: "mdi:play-pause"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
-    on_turn_on:
-      - lambda: |-
-          lv_label_set_text(id(lbl_start_stop), "STOP");
-          lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0xFF3D00), 0);
-    on_turn_off:
-      - lambda: |-
-          lv_label_set_text(id(lbl_start_stop), "START");
-          lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0x00E676), 0);
 
   - platform: template
     name: "Auto Advance"
@@ -1039,14 +1115,6 @@ switch:
     icon: "mdi:skip-next"
     optimistic: true
     restore_mode: RESTORE_DEFAULT_OFF
-    on_turn_on:
-      - lvgl.label.update:
-          id: lbl_auto_adv
-          text: "AUTO: ON"
-    on_turn_off:
-      - lvgl.label.update:
-          id: lbl_auto_adv
-          text: "AUTO: OFF"
 
   - platform: template
     name: "Schedule Enabled"
@@ -1073,6 +1141,7 @@ switch:
     on_turn_off:
       - lambda: 'id(sched_days) &= ~(1 << 0);'
       - script.execute: refresh_schedule_page
+
   - platform: template
     name: "Schedule Tuesday"
     id: day_tue_entity
@@ -1085,6 +1154,7 @@ switch:
     on_turn_off:
       - lambda: 'id(sched_days) &= ~(1 << 1);'
       - script.execute: refresh_schedule_page
+
   - platform: template
     name: "Schedule Wednesday"
     id: day_wed_entity
@@ -1097,6 +1167,7 @@ switch:
     on_turn_off:
       - lambda: 'id(sched_days) &= ~(1 << 2);'
       - script.execute: refresh_schedule_page
+
   - platform: template
     name: "Schedule Thursday"
     id: day_thu_entity
@@ -1109,6 +1180,7 @@ switch:
     on_turn_off:
       - lambda: 'id(sched_days) &= ~(1 << 3);'
       - script.execute: refresh_schedule_page
+
   - platform: template
     name: "Schedule Friday"
     id: day_fri_entity
@@ -1121,6 +1193,7 @@ switch:
     on_turn_off:
       - lambda: 'id(sched_days) &= ~(1 << 4);'
       - script.execute: refresh_schedule_page
+
   - platform: template
     name: "Schedule Saturday"
     id: day_sat_entity
@@ -1133,6 +1206,7 @@ switch:
     on_turn_off:
       - lambda: 'id(sched_days) &= ~(1 << 5);'
       - script.execute: refresh_schedule_page
+
   - platform: template
     name: "Schedule Sunday"
     id: day_sun_entity
@@ -1157,7 +1231,7 @@ switch:
     on_turn_off:
       - lambda: 'id(use_12hour) = false;'
 
-  # Zone switches (1-32) — identical logic, bitmask updates + refresh
+  # Zone switches (1-32)
   - platform: template
     name: "Zone 1"
     id: zone_1_switch
@@ -1544,7 +1618,7 @@ switch:
       - script.execute: refresh_zone_buttons
 
 # ──────────────────────────────────────────────
-# Buttons
+# Buttons (one-shot actions)
 # ──────────────────────────────────────────────
 
 button:
@@ -1552,19 +1626,22 @@ button:
     name: "Pause"
     id: pause_entity
     icon: "mdi:pause"
+
   - platform: template
     name: "Auto Detect Zones"
     id: auto_detect_entity
     icon: "mdi:magnify"
     entity_category: config
+
   - platform: restart
     name: "Restart"
 
 # ──────────────────────────────────────────────
-# Scripts (identical logic to small variant)
+# Scripts
 # ──────────────────────────────────────────────
 
 script:
+  # Helper: toggle a zone switch by number (1-32)
   - id: toggle_zone
     parameters:
       zone_num: int
@@ -1582,6 +1659,7 @@ script:
           };
           if (zone_num >= 1 && zone_num <= 32) sw[zone_num - 1]->toggle();
 
+  # Helper: turn on a zone switch by number (1-32)
   - id: turn_on_zone
     parameters:
       zone_num: int
@@ -1599,6 +1677,7 @@ script:
           };
           if (zone_num >= 1 && zone_num <= 32) sw[zone_num - 1]->turn_on();
 
+  # Helper: set zone duration by zone number
   - id: set_zone_duration
     parameters:
       zone_num: int
@@ -1621,6 +1700,7 @@ script:
             call.perform();
           }
 
+  # Helper: get zone duration by zone number (returns value to slider)
   - id: load_zone_duration
     parameters:
       zone_num: int
@@ -1645,6 +1725,7 @@ script:
             lv_label_set_text(id(lbl_dur_value), buf);
           }
 
+  # Helper: refresh zone page buttons
   - id: refresh_zone_buttons
     then:
       - lambda: |-
@@ -1677,10 +1758,20 @@ script:
           if (last > zc) last = zc;
           snprintf(title, sizeof(title), "ZONES %d-%d", offset + 1, last);
           lv_label_set_text(id(lbl_zone_page_title), title);
+          // Hide/show PREV/NEXT based on zone count
+          if (zc <= 4) {
+            lv_obj_add_flag(id(btn_zone_prev), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(id(btn_zone_next), LV_OBJ_FLAG_HIDDEN);
+          } else {
+            lv_obj_clear_flag(id(btn_zone_prev), LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(id(btn_zone_next), LV_OBJ_FLAG_HIDDEN);
+          }
 
+  # Helper: refresh schedule page
   - id: refresh_schedule_page
     then:
       - lambda: |-
+          // Update enabled label
           if (id(sched_enabled)) {
             lv_label_set_text(id(lbl_sched_enabled), "ON");
             lv_obj_set_style_text_color(id(lbl_sched_enabled), lv_color_hex(0x00E676), 0);
@@ -1688,12 +1779,18 @@ script:
             lv_label_set_text(id(lbl_sched_enabled), "OFF");
             lv_obj_set_style_text_color(id(lbl_sched_enabled), lv_color_hex(0xFF3D00), 0);
           }
+          // Update day buttons
           lv_obj_t* day_btns[] = {id(btn_day_mon), id(btn_day_tue), id(btn_day_wed),
                                    id(btn_day_thu), id(btn_day_fri), id(btn_day_sat), id(btn_day_sun)};
           for (int i = 0; i < 7; i++) {
             bool on = (id(sched_days) >> i) & 1;
-            lv_obj_set_style_bg_color(day_btns[i], on ? lv_color_hex(0x00E676) : lv_color_hex(0x333333), 0);
+            if (on) {
+              lv_obj_set_style_bg_color(day_btns[i], lv_color_hex(0x00E676), 0);
+            } else {
+              lv_obj_set_style_bg_color(day_btns[i], lv_color_hex(0x333333), 0);
+            }
           }
+          // Update time labels
           char buf[32];
           snprintf(buf, sizeof(buf), "1: %s", id(sched_time_1).c_str());
           lv_label_set_text(id(lbl_sched_t1), buf);
@@ -1704,6 +1801,7 @@ script:
           snprintf(buf, sizeof(buf), "4: %s", id(sched_time_4).c_str());
           lv_label_set_text(id(lbl_sched_t4), buf);
 
+  # Helper: update time editor display
   - id: update_time_display
     then:
       - lambda: |-
@@ -1715,10 +1813,12 @@ script:
             if (h12 == 0) h12 = 12;
             const char* ampm = (h < 12) ? "AM" : "PM";
             snprintf(buf, sizeof(buf), "%d:%02d %s", h12, m, ampm);
+            // Show AM/PM button
             lv_obj_clear_flag(id(btn_ampm), LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(id(lbl_ampm), ampm);
           } else {
             snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+            // Hide AM/PM button
             lv_obj_add_flag(id(btn_ampm), LV_OBJ_FLAG_HIDDEN);
           }
           lv_label_set_text(id(lbl_time_display), buf);
@@ -1728,6 +1828,25 @@ script:
 # ──────────────────────────────────────────────
 
 interval:
+  # Update HA time display on status page every second
+  - interval: 1s
+    then:
+      - lambda: |-
+          auto time = id(ha_time).now();
+          if (time.is_valid()) {
+            char buf[16];
+            if (id(use_12hour)) {
+              int h12 = time.hour % 12;
+              if (h12 == 0) h12 = 12;
+              const char* ampm = (time.hour < 12) ? "AM" : "PM";
+              snprintf(buf, sizeof(buf), "%d:%02d %s", h12, time.minute, ampm);
+            } else {
+              snprintf(buf, sizeof(buf), "%02d:%02d", time.hour, time.minute);
+            }
+            lv_label_set_text(id(lbl_current_time), buf);
+          }
+
+  # Idle timeout: return to active zone page after 60s of no interaction
   - interval: 5s
     then:
       - lambda: |-
@@ -1786,7 +1905,7 @@ lvgl:
     - id: style_btn_outline
       bg_color: 0x1A1A1A
       radius: 16
-      border_width: 2
+      border_width: 3
       border_color: 0x00E676
       text_color: 0x00E676
       pad_all: 12
@@ -1810,7 +1929,7 @@ lvgl:
             y: -40
         - label:
             text: "REMOTE"
-            text_font: montserrat_48
+            text_font: montserrat_28
             text_color: 0x888888
             align: CENTER
             y: 20
@@ -1822,7 +1941,7 @@ lvgl:
             align: CENTER
             y: 70
 
-    # ──────── PAGE: STATUS ────────
+    # ──────── PAGE: STATUS (Main Dashboard - Redesigned) ────────
     - id: page_status
       bg_color: 0x0D0D0D
       bg_opa: COVER
@@ -1838,6 +1957,7 @@ lvgl:
             text_color: 0x888888
             align: TOP_MID
             y: 36
+
         - label:
             id: lbl_connection
             text: "HA Disconnected"
@@ -1845,101 +1965,36 @@ lvgl:
             text_color: 0xFF1744
             align: TOP_MID
             y: 68
+
+        # Current time from HA - big centered display
+        - label:
+            id: lbl_current_time
+            text: "--:--"
+            text_font: montserrat_48
+            text_color: 0xFFFFFF
+            align: CENTER
+            y: -48
+
+        # Valve status below time
         - label:
             id: lbl_valve_status
             text: "Idle"
             text_font: montserrat_28
             text_color: 0x00E676
-            align: TOP_MID
-            y: 104
-        - label:
-            id: lbl_time_remaining
-            text: "Time: --"
-            text_font: montserrat_24
-            text_color: 0xFFFFFF
-            x: 80
-            y: 148
-        - label:
-            id: lbl_progress
-            text: "0%"
-            text_font: montserrat_24
-            text_color: 0xFFFFFF
-            align: TOP_RIGHT
-            x: -80
-            y: 148
-        - bar:
-            id: bar_progress
-            align: TOP_MID
-            y: 184
-            width: 320
-            height: 16
-            min_value: 0
-            max_value: 100
-            value: 0
-            bg_color: 0x1A1A1A
-            indicator:
-              bg_color: 0x00E676
+            align: CENTER
+            y: 20
 
-        - button:
-            id: btn_start_stop
-            x: 60
-            y: 216
-            width: 176
-            height: 56
-            styles: style_btn
-            widgets:
-              - label:
-                  id: lbl_start_stop
-                  text: "START"
-                  text_font: montserrat_24
-                  align: CENTER
-                  text_color: 0x0D0D0D
-            on_click:
-              then:
-                - switch.toggle: main_switch_entity
-        - button:
-            id: btn_pause
-            x: 248
-            y: 216
-            width: 176
-            height: 56
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  text: "PAUSE"
-                  text_font: montserrat_24
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - button.press: pause_entity
-        - button:
-            id: btn_auto_adv
-            x: 60
-            y: 284
-            width: 176
-            height: 52
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  id: lbl_auto_adv
-                  text: "AUTO: OFF"
-                  text_font: montserrat_20
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - switch.toggle: auto_advance_entity
+        # Three nav buttons in a row
         - button:
             id: btn_goto_zones
-            x: 248
-            y: 284
-            width: 176
+            x: 32
+            y: 296
+            width: 132
             height: 52
             styles: style_btn_outline
             widgets:
               - label:
-                  text: "ZONES >"
+                  text: "ZONES"
                   text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
@@ -1948,16 +2003,17 @@ lvgl:
                 - lvgl.page.show:
                     id: page_zones
                     animation: NONE
+
         - button:
             id: btn_goto_schedule
-            x: 60
-            y: 348
-            width: 176
+            x: 174
+            y: 296
+            width: 132
             height: 52
             styles: style_btn_outline
             widgets:
               - label:
-                  text: "SCHED >"
+                  text: "SCHED"
                   text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
@@ -1966,16 +2022,17 @@ lvgl:
                 - lvgl.page.show:
                     id: page_schedule
                     animation: NONE
+
         - button:
             id: btn_goto_settings
-            x: 248
-            y: 348
-            width: 176
+            x: 316
+            y: 296
+            width: 132
             height: 52
             styles: style_btn_outline
             widgets:
               - label:
-                  text: "SETUP >"
+                  text: "SETUP"
                   text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
@@ -1984,6 +2041,7 @@ lvgl:
                 - lvgl.page.show:
                     id: page_settings
                     animation: NONE
+
         - label:
             id: lbl_wifi
             text: "WiFi: --"
@@ -2010,6 +2068,8 @@ lvgl:
             text_color: 0x888888
             align: TOP_MID
             y: 36
+
+        # 2x2 grid of zone buttons
         - button:
             id: btn_zone_1
             x: 48
@@ -2030,6 +2090,7 @@ lvgl:
                 - script.execute:
                     id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 1;'
+
         - button:
             id: btn_zone_2
             x: 248
@@ -2050,6 +2111,7 @@ lvgl:
                 - script.execute:
                     id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 2;'
+
         - button:
             id: btn_zone_3
             x: 48
@@ -2070,6 +2132,7 @@ lvgl:
                 - script.execute:
                     id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 3;'
+
         - button:
             id: btn_zone_4
             x: 248
@@ -2090,6 +2153,8 @@ lvgl:
                 - script.execute:
                     id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 4;'
+
+        # Nav: PREV / NEXT
         - button:
             id: btn_zone_prev
             x: 60
@@ -2106,8 +2171,10 @@ lvgl:
             on_click:
               then:
                 - lambda: |-
-                    if (id(zone_page_offset) >= 4) id(zone_page_offset) -= 4;
+                    if (id(zone_page_offset) >= 4)
+                      id(zone_page_offset) -= 4;
                 - script.execute: refresh_zone_buttons
+
         - button:
             id: btn_zone_next
             x: 260
@@ -2124,13 +2191,16 @@ lvgl:
             on_click:
               then:
                 - lambda: |-
-                    if (id(zone_page_offset) + 4 < id(zone_count)) id(zone_page_offset) += 4;
+                    if (id(zone_page_offset) + 4 < id(zone_count))
+                      id(zone_page_offset) += 4;
                 - script.execute: refresh_zone_buttons
+
+        # Bottom row: BACK / TIMER (centered, RUN removed)
         - button:
             id: btn_zones_back
-            x: 36
+            x: 80
             y: 308
-            width: 120
+            width: 144
             height: 48
             styles: style_btn_outline
             widgets:
@@ -2144,29 +2214,12 @@ lvgl:
                 - lvgl.page.show:
                     id: page_status
                     animation: NONE
-        - button:
-            id: btn_zone_run
-            x: 172
-            y: 308
-            width: 136
-            height: 48
-            styles: style_btn
-            widgets:
-              - label:
-                  text: "RUN"
-                  text_font: montserrat_20
-                  align: CENTER
-                  text_color: 0x0D0D0D
-            on_click:
-              then:
-                - script.execute:
-                    id: turn_on_zone
-                    zone_num: !lambda 'return id(last_selected_zone);'
+
         - button:
             id: btn_goto_dur
-            x: 324
+            x: 256
             y: 308
-            width: 120
+            width: 144
             height: 48
             styles: style_btn_outline
             widgets:
@@ -2203,6 +2256,7 @@ lvgl:
             text_color: 0x888888
             align: TOP_MID
             y: 44
+
         - button:
             id: btn_dur_zone_prev
             x: 60
@@ -2228,6 +2282,7 @@ lvgl:
                 - script.execute:
                     id: load_zone_duration
                     zone_num: !lambda 'return id(dur_selected_zone);'
+
         - label:
             id: lbl_dur_zone_name
             text: "Zone 1"
@@ -2235,6 +2290,7 @@ lvgl:
             text_color: 0x00E676
             align: TOP_MID
             y: 96
+
         - button:
             id: btn_dur_zone_next
             x: 340
@@ -2260,6 +2316,7 @@ lvgl:
                 - script.execute:
                     id: load_zone_duration
                     zone_num: !lambda 'return id(dur_selected_zone);'
+
         - label:
             id: lbl_dur_value
             text: "2 min"
@@ -2267,6 +2324,7 @@ lvgl:
             text_color: 0xFFFFFF
             align: CENTER
             y: -32
+
         - slider:
             id: slider_duration
             align: CENTER
@@ -2291,6 +2349,7 @@ lvgl:
                     text:
                       format: "%d min"
                       args: ['(int)x']
+
         - button:
             id: btn_dur_set
             align: CENTER
@@ -2310,6 +2369,7 @@ lvgl:
                     id: set_zone_duration
                     zone_num: !lambda 'return id(dur_selected_zone);'
                     duration_val: !lambda 'return lv_slider_get_value(id(slider_duration));'
+
         - button:
             id: btn_dur_back
             align: BOTTOM_MID
@@ -2346,6 +2406,8 @@ lvgl:
             text_color: 0x888888
             align: TOP_MID
             y: 36
+
+        # Enable toggle
         - button:
             id: btn_sched_toggle
             x: 80
@@ -2358,18 +2420,20 @@ lvgl:
                   text: "Enabled:"
                   text_font: montserrat_20
                   align: LEFT_MID
-                  x: 4
+                  x: 8
                   text_color: 0x888888
               - label:
                   id: lbl_sched_enabled
                   text: "OFF"
                   text_font: montserrat_20
                   align: RIGHT_MID
-                  x: -4
+                  x: -8
                   text_color: 0xFF3D00
             on_click:
               then:
                 - switch.toggle: schedule_enabled_entity
+
+        # Day of week buttons (7 in a row)
         - button:
             id: btn_day_mon
             x: 44
@@ -2387,6 +2451,7 @@ lvgl:
             on_click:
               then:
                 - switch.toggle: day_mon_entity
+
         - button:
             id: btn_day_tue
             x: 104
@@ -2404,6 +2469,7 @@ lvgl:
             on_click:
               then:
                 - switch.toggle: day_tue_entity
+
         - button:
             id: btn_day_wed
             x: 164
@@ -2421,6 +2487,7 @@ lvgl:
             on_click:
               then:
                 - switch.toggle: day_wed_entity
+
         - button:
             id: btn_day_thu
             x: 224
@@ -2438,6 +2505,7 @@ lvgl:
             on_click:
               then:
                 - switch.toggle: day_thu_entity
+
         - button:
             id: btn_day_fri
             x: 284
@@ -2455,6 +2523,7 @@ lvgl:
             on_click:
               then:
                 - switch.toggle: day_fri_entity
+
         - button:
             id: btn_day_sat
             x: 344
@@ -2472,6 +2541,7 @@ lvgl:
             on_click:
               then:
                 - switch.toggle: day_sat_entity
+
         - button:
             id: btn_day_sun
             x: 404
@@ -2489,6 +2559,8 @@ lvgl:
             on_click:
               then:
                 - switch.toggle: day_sun_entity
+
+        # Start time displays (2x2)
         - label:
             id: lbl_sched_t1
             text: "1: --:--"
@@ -2517,6 +2589,8 @@ lvgl:
             text_color: 0x888888
             x: 260
             y: 236
+
+        # Bottom row
         - button:
             id: btn_goto_time_edit
             x: 60
@@ -2535,6 +2609,7 @@ lvgl:
                 - lvgl.page.show:
                     id: page_time_edit
                     animation: NONE
+
         - button:
             id: btn_sched_back
             x: 280
@@ -2554,7 +2629,7 @@ lvgl:
                     id: page_status
                     animation: NONE
 
-    # ──────── PAGE: TIME EDITOR (Redesigned — encoder +/- buttons) ────────
+    # ──────── PAGE: TIME EDITOR (Redesigned — HOUR/MINUTE dial select) ────────
     - id: page_time_edit
       bg_color: 0x0D0D0D
       bg_opa: COVER
@@ -2563,15 +2638,19 @@ lvgl:
           - lambda: |-
               if (id(enc_indev) != nullptr)
                 lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_time_edit));
+              id(time_edit_mode) = 0;
+              // Update title
               char buf[24];
               snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
               lv_label_set_text(id(lbl_time_edit_title), buf);
+              // Parse current time from sched_time global
               std::string current;
               int slot = id(time_edit_slot);
               if (slot == 1) current = id(sched_time_1);
               else if (slot == 2) current = id(sched_time_2);
               else if (slot == 3) current = id(sched_time_3);
               else current = id(sched_time_4);
+              // Parse HH:MM
               if (current.length() >= 5 && current[2] == ':') {
                 id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
                 id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
@@ -2588,6 +2667,8 @@ lvgl:
             text_color: 0x888888
             align: TOP_MID
             y: 36
+
+        # Slot selector
         - button:
             id: btn_slot_prev
             x: 80
@@ -2609,6 +2690,7 @@ lvgl:
                       char buf[24];
                       snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
                       lv_label_set_text(id(lbl_time_edit_title), buf);
+                      // Load time for new slot
                       std::string current;
                       int slot = id(time_edit_slot);
                       if (slot == 1) current = id(sched_time_1);
@@ -2618,9 +2700,13 @@ lvgl:
                       if (current.length() >= 5 && current[2] == ':') {
                         id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
                         id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
-                      } else { id(time_edit_hour) = 6; id(time_edit_minute) = 0; }
+                      } else {
+                        id(time_edit_hour) = 6;
+                        id(time_edit_minute) = 0;
+                      }
                     }
                 - script.execute: update_time_display
+
         - button:
             id: btn_slot_next
             x: 320
@@ -2651,84 +2737,68 @@ lvgl:
                       if (current.length() >= 5 && current[2] == ':') {
                         id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
                         id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
-                      } else { id(time_edit_hour) = 6; id(time_edit_minute) = 0; }
+                      } else {
+                        id(time_edit_hour) = 6;
+                        id(time_edit_minute) = 0;
+                      }
                     }
                 - script.execute: update_time_display
+
+        # Time display (moved up)
         - label:
             id: lbl_time_display
             text: "06:00"
             text_font: montserrat_48
             text_color: 0xFFFFFF
             align: CENTER
-            y: -52
+            y: -72
+
+        # HOUR and MINUTE select buttons
         - button:
-            id: btn_hour_up
-            x: 56
+            id: btn_hour_select
+            x: 72
             y: 200
-            width: 88
-            height: 48
+            width: 152
+            height: 52
             styles: style_btn_outline
             widgets:
               - label:
-                  text: "HR+"
+                  text: "HOUR"
                   text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
               then:
-                - lambda: 'id(time_edit_hour) = (id(time_edit_hour) + 1) % 24;'
-                - script.execute: update_time_display
+                - lambda: |-
+                    id(time_edit_mode) = 1;
+                    id(encoder_last_value) = (int)id(dial_encoder).state;
+                - lvgl.page.show:
+                    id: page_hour_select
+                    animation: NONE
+
         - button:
-            id: btn_hour_down
-            x: 152
+            id: btn_minute_select
+            x: 256
             y: 200
-            width: 88
-            height: 48
+            width: 152
+            height: 52
             styles: style_btn_outline
             widgets:
               - label:
-                  text: "HR-"
+                  text: "MINUTE"
                   text_font: montserrat_20
                   align: CENTER
                   text_color: 0x00E676
             on_click:
               then:
-                - lambda: 'id(time_edit_hour) = (id(time_edit_hour) + 23) % 24;'
-                - script.execute: update_time_display
-        - button:
-            id: btn_min_up
-            x: 248
-            y: 200
-            width: 88
-            height: 48
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  text: "MN+"
-                  text_font: montserrat_20
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - lambda: 'id(time_edit_minute) = (id(time_edit_minute) + 1) % 60;'
-                - script.execute: update_time_display
-        - button:
-            id: btn_min_down
-            x: 344
-            y: 200
-            width: 88
-            height: 48
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  text: "MN-"
-                  text_font: montserrat_20
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - lambda: 'id(time_edit_minute) = (id(time_edit_minute) + 59) % 60;'
-                - script.execute: update_time_display
+                - lambda: |-
+                    id(time_edit_mode) = 2;
+                    id(encoder_last_value) = (int)id(dial_encoder).state;
+                - lvgl.page.show:
+                    id: page_minute_select
+                    animation: NONE
+
+        # AM/PM toggle (visible only in 12hr mode)
         - button:
             id: btn_ampm
             align: TOP_MID
@@ -2746,9 +2816,15 @@ lvgl:
             on_click:
               then:
                 - lambda: |-
-                    if (id(time_edit_hour) < 12) id(time_edit_hour) += 12;
-                    else id(time_edit_hour) -= 12;
+                    // Toggle AM/PM by flipping 12 hours
+                    if (id(time_edit_hour) < 12) {
+                      id(time_edit_hour) += 12;
+                    } else {
+                      id(time_edit_hour) -= 12;
+                    }
                 - script.execute: update_time_display
+
+        # Bottom buttons: SET / CLEAR / BACK
         - button:
             id: btn_time_set
             x: 36
@@ -2765,6 +2841,7 @@ lvgl:
             on_click:
               then:
                 - lambda: |-
+                    // Always store as 24hr "HH:MM" internally
                     char time_buf[8];
                     snprintf(time_buf, sizeof(time_buf), "%02d:%02d", id(time_edit_hour), id(time_edit_minute));
                     std::string ts = time_buf;
@@ -2773,6 +2850,7 @@ lvgl:
                     else if (slot == 2) { id(sched_time_2) = ts; auto call = id(sched_time_2_entity).make_call(); call.set_value(ts); call.perform(); }
                     else if (slot == 3) { id(sched_time_3) = ts; auto call = id(sched_time_3_entity).make_call(); call.set_value(ts); call.perform(); }
                     else if (slot == 4) { id(sched_time_4) = ts; auto call = id(sched_time_4_entity).make_call(); call.set_value(ts); call.perform(); }
+
         - button:
             id: btn_time_clear
             x: 176
@@ -2798,6 +2876,7 @@ lvgl:
                     id(time_edit_hour) = 6;
                     id(time_edit_minute) = 0;
                 - script.execute: update_time_display
+
         - button:
             id: btn_time_back
             x: 316
@@ -2817,7 +2896,128 @@ lvgl:
                     id: page_schedule
                     animation: NONE
 
-    # ──────── PAGE: SETTINGS (Simplified) ────────
+    # ──────── PAGE: HOUR SELECT (dial to change hour) ────────
+    - id: page_hour_select
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_hour_sel));
+              // Set initial hour display
+              char buf[8];
+              int h = id(time_edit_hour);
+              if (id(use_12hour)) {
+                int h12 = h % 12;
+                if (h12 == 0) h12 = 12;
+                snprintf(buf, sizeof(buf), "%d", h12);
+              } else {
+                snprintf(buf, sizeof(buf), "%02d", h);
+              }
+              lv_label_set_text(id(lbl_hour_value), buf);
+      widgets:
+        - label:
+            text: "SELECT HOUR"
+            text_font: montserrat_24
+            text_color: 0x888888
+            align: TOP_MID
+            y: 60
+
+        - label:
+            id: lbl_hour_value
+            text: "6"
+            text_font: montserrat_48
+            text_color: 0x00E676
+            align: CENTER
+            y: -32
+
+        - label:
+            text: "Rotate dial to change"
+            text_font: montserrat_20
+            text_color: 0x555555
+            align: CENTER
+            y: 60
+
+        - button:
+            id: btn_hour_confirm
+            align: CENTER
+            y: 124
+            width: 200
+            height: 60
+            styles: style_btn
+            widgets:
+              - label:
+                  text: "OK"
+                  text_font: montserrat_28
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - lambda: 'id(time_edit_mode) = 0;'
+                - script.execute: update_time_display
+                - lvgl.page.show:
+                    id: page_time_edit
+                    animation: NONE
+
+    # ──────── PAGE: MINUTE SELECT (dial to change minute) ────────
+    - id: page_minute_select
+      bg_color: 0x0D0D0D
+      bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_minute_sel));
+              // Set initial minute display
+              char buf[8];
+              snprintf(buf, sizeof(buf), "%02d", id(time_edit_minute));
+              lv_label_set_text(id(lbl_minute_value), buf);
+      widgets:
+        - label:
+            text: "SELECT MINUTE"
+            text_font: montserrat_24
+            text_color: 0x888888
+            align: TOP_MID
+            y: 60
+
+        - label:
+            id: lbl_minute_value
+            text: "00"
+            text_font: montserrat_48
+            text_color: 0x00E676
+            align: CENTER
+            y: -32
+
+        - label:
+            text: "Rotate dial to change"
+            text_font: montserrat_20
+            text_color: 0x555555
+            align: CENTER
+            y: 60
+
+        - button:
+            id: btn_minute_confirm
+            align: CENTER
+            y: 124
+            width: 200
+            height: 60
+            styles: style_btn
+            widgets:
+              - label:
+                  text: "OK"
+                  text_font: montserrat_28
+                  align: CENTER
+                  text_color: 0x0D0D0D
+            on_click:
+              then:
+                - lambda: 'id(time_edit_mode) = 0;'
+                - script.execute: update_time_display
+                - lvgl.page.show:
+                    id: page_time_edit
+                    animation: NONE
+
+    # ──────── PAGE: SETTINGS (Simplified — just 12/24hr toggle) ────────
     - id: page_settings
       bg_color: 0x0D0D0D
       bg_opa: COVER
@@ -2826,10 +3026,7 @@ lvgl:
           - lambda: |-
               if (id(enc_indev) != nullptr)
                 lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_settings));
-              lv_slider_set_value(id(slider_zone_count), id(zone_count), LV_ANIM_OFF);
-              char zc[4];
-              snprintf(zc, sizeof(zc), "%d", id(zone_count));
-              lv_label_set_text(id(lbl_zone_count_val), zc);
+              // Update 12hr toggle label
               if (id(use_12hour)) {
                 lv_label_set_text(id(lbl_12hr_toggle), "12 HR");
               } else {
@@ -2842,69 +3039,20 @@ lvgl:
             text_color: 0x888888
             align: TOP_MID
             y: 44
-        - label:
-            text: "Zones:"
-            text_font: montserrat_20
-            text_color: 0x888888
-            x: 60
-            y: 96
-        - slider:
-            id: slider_zone_count
-            x: 148
-            y: 100
-            width: 200
-            height: 24
-            min_value: 1
-            max_value: 32
-            value: 8
-            bg_color: 0x1A1A1A
-            indicator:
-              bg_color: 0x00E676
-            knob:
-              bg_color: 0xFFFFFF
-              radius: 12
-            on_value:
-              then:
-                - lvgl.label.update:
-                    id: lbl_zone_count_val
-                    text:
-                      format: "%d"
-                      args: ['(int)x']
-        - label:
-            id: lbl_zone_count_val
-            text: "8"
-            text_font: montserrat_24
-            text_color: 0x00E676
-            x: 368
-            y: 92
-        - button:
-            id: btn_auto_detect
-            align: TOP_MID
-            y: 152
-            width: 280
-            height: 52
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  text: "AUTO DETECT"
-                  text_font: montserrat_20
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - button.press: auto_detect_entity
+
+        # 12/24 Hour toggle
         - button:
             id: btn_12hr_toggle
-            align: TOP_MID
-            y: 220
+            align: CENTER
+            y: -20
             width: 280
-            height: 52
+            height: 60
             styles: style_btn_outline
             widgets:
               - label:
                   id: lbl_12hr_toggle
                   text: "12 HR"
-                  text_font: montserrat_20
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2916,38 +3064,19 @@ lvgl:
                     } else {
                       lv_label_set_text(id(lbl_12hr_toggle), "24 HR");
                     }
-        - button:
-            id: btn_settings_save
-            align: CENTER
-            y: 72
-            width: 240
-            height: 60
-            styles: style_btn
-            widgets:
-              - label:
-                  text: "SAVE"
-                  text_font: montserrat_28
-                  align: CENTER
-                  text_color: 0x0D0D0D
-            on_click:
-              then:
-                - lambda: |-
-                    int zc = lv_slider_get_value(id(slider_zone_count));
-                    id(zone_count) = zc;
-                    auto call = id(zone_count_entity).make_call();
-                    call.set_value(zc);
-                    call.perform();
+
+        # Back button
         - button:
             id: btn_settings_back
-            align: BOTTOM_MID
-            y: -56
-            width: 160
-            height: 52
+            align: CENTER
+            y: 80
+            width: 200
+            height: 60
             styles: style_btn_outline
             widgets:
               - label:
                   text: "< BACK"
-                  text_font: montserrat_20
+                  text_font: montserrat_24
                   align: CENTER
                   text_color: 0x00E676
             on_click:
@@ -2956,10 +3085,15 @@ lvgl:
                     id: page_status
                     animation: NONE
 
-    # ──────── PAGE: ACTIVE ZONE ────────
+    # ──────── PAGE: ACTIVE ZONE (big display when zone running) ────────
     - id: page_active_zone
       bg_color: 0x0D0D0D
       bg_opa: COVER
+      on_load:
+        then:
+          - lambda: |-
+              if (id(enc_indev) != nullptr)
+                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_active_zone));
       widgets:
         - label:
             id: lbl_big_zone_title
@@ -2967,7 +3101,8 @@ lvgl:
             text_font: montserrat_28
             text_color: 0x888888
             align: TOP_MID
-            y: 80
+            y: 60
+
         - label:
             id: lbl_big_zone
             text: "--"
@@ -2975,16 +3110,42 @@ lvgl:
             text_color: 0x00E676
             align: CENTER
             y: -40
+
         - label:
             id: lbl_big_remaining
             text: "--"
             text_font: montserrat_48
             text_color: 0x2979FF
             align: CENTER
-            y: 80
-        - label:
-            text: "tap to exit"
-            text_font: montserrat_20
-            text_color: 0x444444
-            align: BOTTOM_MID
-            y: -40
+            y: 40
+
+        - bar:
+            id: bar_active_progress
+            align: CENTER
+            y: 100
+            width: 320
+            height: 16
+            min_value: 0
+            max_value: 100
+            value: 0
+            bg_color: 0x1A1A1A
+            indicator:
+              bg_color: 0x00E676
+
+        # Big red STOP button
+        - button:
+            id: btn_active_stop
+            align: CENTER
+            y: 160
+            width: 240
+            height: 80
+            styles: style_btn_red
+            widgets:
+              - label:
+                  text: "STOP"
+                  text_font: montserrat_28
+                  align: CENTER
+                  text_color: 0xFFFFFF
+            on_click:
+              then:
+                - switch.turn_off: main_switch_entity
