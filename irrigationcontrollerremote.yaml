@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.16.0 — Sticky delta correction, debounce zone popup (1.5s)
+# v2.17.0 — Manual stop switch, skip delta on manual stop
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.16.0"
+  software_version: "2.17.0"
 
 esphome:
   name: "${name}"
@@ -1293,6 +1293,13 @@ switch:
     optimistic: true
     restore_mode: ALWAYS_ON
 
+  - platform: template
+    name: "Manual Stop"
+    id: manual_stop
+    icon: "mdi:stop-circle-outline"
+    optimistic: true
+    restore_mode: DISABLED
+
   # Zone switches (1-32)
   - platform: template
     name: "Zone 1"
@@ -1865,9 +1872,12 @@ script:
             snprintf(dbuf, sizeof(dbuf), "%d", delta);
             id(delta_latency_entity).publish_state(dbuf);
             id(last_delta_latency_entity).publish_state(dbuf);
-            // Only update used correction when delta != 0
-            // If delta is 0, current correction is working — keep it
-            if (delta != 0) {
+            // Manual stop: skip used delta update, reset flag
+            if (id(manual_stop).state) {
+              id(manual_stop).turn_off();
+            } else if (delta != 0) {
+              // Only update used correction when delta != 0
+              // If delta is 0, current correction is working — keep it
               id(used_delta_latency_entity).publish_state(dbuf);
             }
             // Stop countdown and reset
