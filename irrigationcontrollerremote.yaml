@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.6.0 — Bigger logo on status page, moved up
+# v2.7.0 — Screen sleep after 2 min idle, wake on dial/button/touch
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.6.0"
+  software_version: "2.7.0"
 
 esphome:
   name: "${name}"
@@ -238,6 +238,13 @@ touchscreen:
     id: touch
     i2c_id: internal_i2c
     address: 0x38
+    on_touch:
+      then:
+        - lambda: |-
+            if (id(screen_sleeping)) {
+              id(screen_sleeping) = false;
+              id(lcd_backlight).turn_on().set_brightness(1.0f).perform();
+            }
 
 light:
   - platform: monochromatic
@@ -411,6 +418,12 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # Screen sleep tracking
+  - id: screen_sleeping
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
 # ──────────────────────────────────────────────
 # Sensors
 # ──────────────────────────────────────────────
@@ -437,6 +450,12 @@ sensor:
             int diff = cur - last;
             id(encoder_last_value) = cur;
             if (diff == 0) return;
+            // Wake screen on dial turn
+            if (id(screen_sleeping)) {
+              id(screen_sleeping) = false;
+              id(lcd_backlight).turn_on().set_brightness(1.0f).perform();
+              return;  // swallow this input so it doesn't navigate
+            }
             int mode = id(time_edit_mode);
             if (mode == 1) {
               // Editing hour
@@ -490,7 +509,12 @@ binary_sensor:
     on_click:
       then:
         - lambda: |-
-            // No-op: encoder button presses are handled by LVGL focus groups
+            // Wake screen on button press
+            if (id(screen_sleeping)) {
+              id(screen_sleeping) = false;
+              id(lcd_backlight).turn_on().set_brightness(1.0f).perform();
+              return;  // swallow this press so it doesn't activate a button
+            }
 
   - platform: template
     name: "WiFi Connected"
@@ -1838,6 +1862,16 @@ interval:
               id(zone_active_showing) = false;
               lv_scr_load(id(page_status)->obj);
             }
+          }
+
+  # Screen sleep: turn off backlight after 2 minutes of inactivity
+  - interval: 5s
+    then:
+      - lambda: |-
+          uint32_t idle_ms = lv_disp_get_inactive_time(NULL);
+          if (!id(screen_sleeping) && idle_ms >= 120000) {
+            id(screen_sleeping) = true;
+            id(lcd_backlight).turn_off().perform();
           }
 
 # ──────────────────────────────────────────────
