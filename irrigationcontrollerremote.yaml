@@ -1,11 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# Communicates via HTTP REST to the controller's web server
+# v2.0.0 — Pure HA mirror entity architecture (no HTTP)
+# All entities are optimistic templates. HA automations sync
+# bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "1.0.3"
+  software_version: "2.0.0"
 
 esphome:
   name: "${name}"
@@ -28,7 +30,6 @@ esphome:
           lv_group_t *g_sched    = lv_group_create();
           lv_group_t *g_time_ed  = lv_group_create();
           lv_group_t *g_settings = lv_group_create();
-          lv_group_t *g_ip_edit  = lv_group_create();
 
           // page_status
           lv_group_add_obj(g_status, id(btn_start_stop));
@@ -71,35 +72,29 @@ esphome:
           // page_time_edit
           lv_group_add_obj(g_time_ed, id(btn_slot_prev));
           lv_group_add_obj(g_time_ed, id(btn_slot_next));
-          lv_group_add_obj(g_time_ed, id(slider_hour));
-          lv_group_add_obj(g_time_ed, id(slider_minute));
+          lv_group_add_obj(g_time_ed, id(btn_hour_up));
+          lv_group_add_obj(g_time_ed, id(btn_hour_down));
+          lv_group_add_obj(g_time_ed, id(btn_min_up));
+          lv_group_add_obj(g_time_ed, id(btn_min_down));
+          lv_group_add_obj(g_time_ed, id(btn_ampm));
           lv_group_add_obj(g_time_ed, id(btn_time_set));
           lv_group_add_obj(g_time_ed, id(btn_time_clear));
           lv_group_add_obj(g_time_ed, id(btn_time_back));
 
           // page_settings
-          lv_group_add_obj(g_settings, id(btn_ip_octet_1));
-          lv_group_add_obj(g_settings, id(btn_ip_octet_2));
-          lv_group_add_obj(g_settings, id(btn_ip_octet_3));
-          lv_group_add_obj(g_settings, id(btn_ip_octet_4));
           lv_group_add_obj(g_settings, id(slider_zone_count));
           lv_group_add_obj(g_settings, id(btn_auto_detect));
+          lv_group_add_obj(g_settings, id(btn_12hr_toggle));
           lv_group_add_obj(g_settings, id(btn_settings_save));
           lv_group_add_obj(g_settings, id(btn_settings_back));
 
-          // page_ip_edit
-          lv_group_add_obj(g_ip_edit, id(slider_ip_val));
-          lv_group_add_obj(g_ip_edit, id(btn_ip_edit_ok));
-          lv_group_add_obj(g_ip_edit, id(btn_ip_edit_cancel));
-
           // Store group pointers
-          id(grp_status)   = (void*)g_status;
-          id(grp_zones)    = (void*)g_zones;
-          id(grp_duration) = (void*)g_dur;
-          id(grp_schedule) = (void*)g_sched;
+          id(grp_status)    = (void*)g_status;
+          id(grp_zones)     = (void*)g_zones;
+          id(grp_duration)  = (void*)g_dur;
+          id(grp_schedule)  = (void*)g_sched;
           id(grp_time_edit) = (void*)g_time_ed;
-          id(grp_settings) = (void*)g_settings;
-          id(grp_ip_edit)  = (void*)g_ip_edit;
+          id(grp_settings)  = (void*)g_settings;
 
           // Find encoder indev and assign initial group
           lv_indev_t *enc = nullptr;
@@ -127,29 +122,46 @@ esp32:
   flash_size: 8MB
   framework:
     type: esp-idf
-    sdkconfig_options:
-      CONFIG_HTTP_BUF_SIZE: "8192"
 
 logger:
   level: DEBUG
 
 api:
   id: api_server
+  on_client_connected:
+    - lvgl.label.update:
+        id: lbl_connection
+        text: "HA Connected"
+    - lambda: |-
+        lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0x00E676), 0);
+  on_client_disconnected:
+    - lvgl.label.update:
+        id: lbl_connection
+        text: "HA Disconnected"
+    - lambda: |-
+        lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0xFF1744), 0);
 
 ota:
   - id: ota_component
     platform: esphome
+  - id: ota_http_request
+    platform: http_request
 
+# HTTP request component for firmware updates
 http_request:
-  id: http_req
-  buffer_size_rx: 2048
-  buffer_size_tx: 1024
-  follow_redirects: false
-  timeout: 2s
-  verify_ssl: false
+  id: http_request_component
+  buffer_size_rx: 8192
+  buffer_size_tx: 4096
+  follow_redirects: true
+  timeout: 30s
+  verify_ssl: true
 
-# Required for json::parse_json in HTTP response lambdas
-json:
+# Firmware update from GitHub
+update:
+  - platform: http_request
+    id: firmware_update
+    name: "Firmware Update"
+    source: https://raw.githubusercontent.com/FluxOpenHome/IrrigationControllerRemote/main/manifest.json
 
 wifi:
   id: wifi_component
@@ -160,13 +172,15 @@ wifi:
     - lvgl.label.update:
         id: lbl_wifi
         text: "WiFi: ON"
-        text_color: 0x00E676
+    - lambda: |-
+        lv_obj_set_style_text_color(id(lbl_wifi), lv_color_hex(0x00E676), 0);
   on_disconnect:
     - lambda: 'id(wifi_connected) = false;'
     - lvgl.label.update:
         id: lbl_wifi
         text: "WiFi: OFF"
-        text_color: 0xFF1744
+    - lambda: |-
+        lv_obj_set_style_text_color(id(lbl_wifi), lv_color_hex(0xFF1744), 0);
 
 captive_portal:
 
@@ -263,86 +277,18 @@ globals:
     type: void*
     restore_value: no
     initial_value: 'nullptr'
-  - id: grp_ip_edit
-    type: void*
-    restore_value: no
-    initial_value: 'nullptr'
 
-  # Connection state
+  # WiFi state
   - id: wifi_connected
     type: bool
     restore_value: no
     initial_value: 'false'
-  - id: controller_connected
-    type: bool
-    restore_value: no
-    initial_value: 'false'
-  - id: poll_error_count
-    type: int
-    restore_value: no
-    initial_value: '0'
-  - id: http_busy
-    type: bool
-    restore_value: no
-    initial_value: 'false'
-  - id: poll_backoff_ticks
-    type: int
-    restore_value: no
-    initial_value: '0'
-
-  # Controller IP (stored as 4 octets, persists across reboots)
-  - id: ip_octet_1
-    type: int
-    restore_value: yes
-    initial_value: '192'
-  - id: ip_octet_2
-    type: int
-    restore_value: yes
-    initial_value: '168'
-  - id: ip_octet_3
-    type: int
-    restore_value: yes
-    initial_value: '1'
-  - id: ip_octet_4
-    type: int
-    restore_value: yes
-    initial_value: '100'
-  - id: editing_octet
-    type: int
-    restore_value: no
-    initial_value: '1'
 
   # Zone count (configurable, persists)
   - id: zone_count
     type: int
     restore_value: yes
     initial_value: '8'
-
-  # Status data from controller
-  - id: ctrl_valve_status
-    type: std::string
-    restore_value: no
-    initial_value: '"Disconnected"'
-  - id: ctrl_time_remaining
-    type: std::string
-    restore_value: no
-    initial_value: '"--"'
-  - id: ctrl_active_zone
-    type: std::string
-    restore_value: no
-    initial_value: '"--"'
-  - id: ctrl_progress
-    type: std::string
-    restore_value: no
-    initial_value: '"--"'
-  - id: ctrl_main_switch_on
-    type: bool
-    restore_value: no
-    initial_value: 'false'
-  - id: ctrl_auto_advance_on
-    type: bool
-    restore_value: no
-    initial_value: 'false'
 
   # Zone states bitmask (bit N = zone N+1 active)
   - id: zone_states
@@ -366,7 +312,7 @@ globals:
     restore_value: no
     initial_value: '1'
 
-  # Schedule state (cached from controller)
+  # Schedule state
   - id: sched_enabled
     type: bool
     restore_value: no
@@ -397,24 +343,20 @@ globals:
     type: int
     restore_value: no
     initial_value: '1'
-
-  # Status poll step (rotating through 5 endpoints, 1 per tick)
-  - id: poll_step
+  - id: time_edit_hour
+    type: int
+    restore_value: no
+    initial_value: '6'
+  - id: time_edit_minute
     type: int
     restore_value: no
     initial_value: '0'
 
-  # Schedule poll step (rotating through 12 endpoints, 1 per tick)
-  - id: sched_poll_step
-    type: int
-    restore_value: no
-    initial_value: '0'
-
-  # Zone state poll index (rotating)
-  - id: zone_poll_idx
-    type: int
-    restore_value: no
-    initial_value: '0'
+  # 12-hour format flag
+  - id: use_12hour
+    type: bool
+    restore_value: yes
+    initial_value: 'true'
 
   # Active zone page tracking
   - id: zone_active_showing
@@ -461,68 +403,23 @@ binary_sensor:
       inverted: true
 
   - platform: template
-    name: "Controller Connected"
-    id: controller_connected_bin
-    device_class: "connectivity"
-    lambda: 'return id(controller_connected);'
-
-  - platform: template
     name: "WiFi Connected"
     id: wifi_connected_bin
     device_class: "connectivity"
     lambda: 'return id(wifi_connected);'
 
+  - platform: template
+    name: "Rain Sensor"
+    id: rain_sensor_entity
+    icon: "mdi:weather-rainy"
+    device_class: "moisture"
+    lambda: 'return false;'
+
 # ──────────────────────────────────────────────
-# Exposed Entities - Text Sensors (read-only status from controller)
+# Text Sensors (read-only)
 # ──────────────────────────────────────────────
 
 text_sensor:
-  - platform: template
-    name: "Valve Status"
-    id: valve_status_entity
-    icon: "mdi:valve"
-    lambda: 'return id(ctrl_valve_status);'
-    update_interval: 5s
-
-  - platform: template
-    name: "Time Remaining"
-    id: time_remaining_entity
-    icon: "mdi:timer-sand"
-    lambda: 'return id(ctrl_time_remaining);'
-    update_interval: 5s
-
-  - platform: template
-    name: "Progress"
-    id: progress_entity
-    icon: "mdi:progress-clock"
-    lambda: 'return id(ctrl_progress);'
-    update_interval: 5s
-
-  - platform: template
-    name: "Active Zone"
-    id: active_zone_entity
-    icon: "mdi:sprinkler-variant"
-    lambda: 'return id(ctrl_active_zone);'
-    update_interval: 5s
-
-  - platform: template
-    name: "Remaining Time"
-    id: remaining_time_entity
-    icon: "mdi:timer-sand"
-    lambda: 'return id(ctrl_time_remaining);'
-    update_interval: 5s
-
-  - platform: template
-    name: "Controller IP"
-    id: controller_ip_entity
-    icon: "mdi:ip-network"
-    lambda: |-
-      char buf[20];
-      snprintf(buf, sizeof(buf), "%d.%d.%d.%d",
-               id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-      return std::string(buf);
-    update_interval: 60s
-
   - platform: version
     name: "ESPHome Version"
 
@@ -533,7 +430,160 @@ text_sensor:
       name: "Connected SSID"
 
 # ──────────────────────────────────────────────
-# Exposed Entities - Numbers (adjustable settings)
+# Template Text Entities (writable from HA)
+# ──────────────────────────────────────────────
+
+text:
+  - platform: template
+    name: "Valve Status"
+    id: valve_status_entity
+    icon: "mdi:valve"
+    optimistic: true
+    min_length: 0
+    max_length: 64
+    mode: text
+    initial_value: "Idle"
+    on_value:
+      then:
+        - lambda: |-
+            lv_label_set_text(id(lbl_valve_status), x.c_str());
+            // Color based on status
+            if (x.find("Active") != std::string::npos) {
+              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
+              // Extract zone number for active zone display
+              std::string zone_num = "--";
+              for (size_t i = 0; i < x.find("Active"); i++) {
+                if (isdigit(x[i])) {
+                  size_t start = i;
+                  while (i < x.size() && isdigit(x[i])) i++;
+                  zone_num = x.substr(start, i - start);
+                  break;
+                }
+              }
+              lv_label_set_text(id(lbl_big_zone), zone_num.c_str());
+            } else if (x == "Idle" || x == "System Ready") {
+              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x00E676), 0);
+              if (id(zone_active_showing)) {
+                id(zone_active_showing) = false;
+                lv_scr_load(id(page_status)->obj);
+              }
+            } else if (x.find("Rain") != std::string::npos) {
+              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
+            } else if (x == "Paused") {
+              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFAB00), 0);
+            } else {
+              lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFFFFF), 0);
+            }
+
+  - platform: template
+    name: "Time Remaining"
+    id: time_remaining_entity
+    icon: "mdi:timer-sand"
+    optimistic: true
+    min_length: 0
+    max_length: 16
+    mode: text
+    initial_value: "--"
+    on_value:
+      then:
+        - lambda: |-
+            char buf[24];
+            snprintf(buf, sizeof(buf), "Time: %s", x.c_str());
+            lv_label_set_text(id(lbl_time_remaining), buf);
+            lv_label_set_text(id(lbl_big_remaining), x.c_str());
+
+  - platform: template
+    name: "Progress"
+    id: progress_entity
+    icon: "mdi:progress-clock"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: "0"
+    on_value:
+      then:
+        - lambda: |-
+            lv_label_set_text(id(lbl_progress), x.c_str());
+            int pct = atoi(x.c_str());
+            lv_bar_set_value(id(bar_progress), pct, LV_ANIM_ON);
+
+  - platform: template
+    name: "Active Zone"
+    id: active_zone_entity
+    icon: "mdi:sprinkler-variant"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: "--"
+    on_value:
+      then:
+        - lambda: |-
+            lv_label_set_text(id(lbl_big_zone), x.c_str());
+
+  - platform: template
+    name: "Schedule Start Time 1"
+    id: sched_time_1_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    on_value:
+      then:
+        - lambda: |-
+            id(sched_time_1) = x.empty() ? "--:--" : x;
+        - script.execute: refresh_schedule_page
+
+  - platform: template
+    name: "Schedule Start Time 2"
+    id: sched_time_2_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    on_value:
+      then:
+        - lambda: |-
+            id(sched_time_2) = x.empty() ? "--:--" : x;
+        - script.execute: refresh_schedule_page
+
+  - platform: template
+    name: "Schedule Start Time 3"
+    id: sched_time_3_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    on_value:
+      then:
+        - lambda: |-
+            id(sched_time_3) = x.empty() ? "--:--" : x;
+        - script.execute: refresh_schedule_page
+
+  - platform: template
+    name: "Schedule Start Time 4"
+    id: sched_time_4_entity
+    icon: "mdi:clock-start"
+    optimistic: true
+    min_length: 0
+    max_length: 8
+    mode: text
+    initial_value: ""
+    on_value:
+      then:
+        - lambda: |-
+            id(sched_time_4) = x.empty() ? "--:--" : x;
+        - script.execute: refresh_schedule_page
+
+# ──────────────────────────────────────────────
+# Template Numbers
 # ──────────────────────────────────────────────
 
 number:
@@ -557,68 +607,362 @@ number:
           snprintf(buf, sizeof(buf), "%d", (int)x);
           lv_label_set_text(id(lbl_zone_count_val), buf);
 
+  # Zone durations (1-32)
   - platform: template
-    name: "IP Octet 1"
-    id: ip_octet_1_entity
-    icon: "mdi:ip-network"
-    min_value: 0
-    max_value: 255
+    name: "Zone 1 Duration"
+    id: zone_1_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
     step: 1
-    mode: box
+    mode: slider
     optimistic: true
     restore_value: true
-    initial_value: 192
-    entity_category: config
-    set_action:
-      - lambda: 'id(ip_octet_1) = (int)x;'
-
+    initial_value: 2
   - platform: template
-    name: "IP Octet 2"
-    id: ip_octet_2_entity
-    icon: "mdi:ip-network"
-    min_value: 0
-    max_value: 255
+    name: "Zone 2 Duration"
+    id: zone_2_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
     step: 1
-    mode: box
+    mode: slider
     optimistic: true
     restore_value: true
-    initial_value: 168
-    entity_category: config
-    set_action:
-      - lambda: 'id(ip_octet_2) = (int)x;'
-
+    initial_value: 2
   - platform: template
-    name: "IP Octet 3"
-    id: ip_octet_3_entity
-    icon: "mdi:ip-network"
-    min_value: 0
-    max_value: 255
+    name: "Zone 3 Duration"
+    id: zone_3_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
     step: 1
-    mode: box
+    mode: slider
     optimistic: true
     restore_value: true
-    initial_value: 1
-    entity_category: config
-    set_action:
-      - lambda: 'id(ip_octet_3) = (int)x;'
-
+    initial_value: 2
   - platform: template
-    name: "IP Octet 4"
-    id: ip_octet_4_entity
-    icon: "mdi:ip-network"
-    min_value: 0
-    max_value: 255
+    name: "Zone 4 Duration"
+    id: zone_4_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
     step: 1
-    mode: box
+    mode: slider
     optimistic: true
     restore_value: true
-    initial_value: 100
-    entity_category: config
-    set_action:
-      - lambda: 'id(ip_octet_4) = (int)x;'
+    initial_value: 2
+  - platform: template
+    name: "Zone 5 Duration"
+    id: zone_5_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 6 Duration"
+    id: zone_6_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 7 Duration"
+    id: zone_7_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 8 Duration"
+    id: zone_8_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 9 Duration"
+    id: zone_9_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 10 Duration"
+    id: zone_10_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 11 Duration"
+    id: zone_11_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 12 Duration"
+    id: zone_12_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 13 Duration"
+    id: zone_13_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 14 Duration"
+    id: zone_14_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 15 Duration"
+    id: zone_15_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 16 Duration"
+    id: zone_16_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 17 Duration"
+    id: zone_17_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 18 Duration"
+    id: zone_18_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 19 Duration"
+    id: zone_19_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 20 Duration"
+    id: zone_20_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 21 Duration"
+    id: zone_21_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 22 Duration"
+    id: zone_22_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 23 Duration"
+    id: zone_23_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 24 Duration"
+    id: zone_24_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 25 Duration"
+    id: zone_25_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 26 Duration"
+    id: zone_26_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 27 Duration"
+    id: zone_27_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 28 Duration"
+    id: zone_28_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 29 Duration"
+    id: zone_29_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 30 Duration"
+    id: zone_30_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 31 Duration"
+    id: zone_31_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+  - platform: template
+    name: "Zone 32 Duration"
+    id: zone_32_dur_entity
+    icon: "mdi:timer"
+    min_value: 1
+    max_value: 60
+    step: 1
+    mode: slider
+    optimistic: true
+    restore_value: true
+    initial_value: 2
 
 # ──────────────────────────────────────────────
-# Exposed Entities - Switches (toggleable controls)
+# Template Switches
 # ──────────────────────────────────────────────
 
 switch:
@@ -626,142 +970,535 @@ switch:
     name: "Start Stop"
     id: main_switch_entity
     icon: "mdi:play-pause"
-    restore_mode: DISABLED
-    lambda: 'return id(ctrl_main_switch_on);'
-    turn_on_action:
-      - script.execute: send_main_toggle
-    turn_off_action:
-      - script.execute: send_main_toggle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: |-
+          lv_label_set_text(id(lbl_start_stop), "STOP");
+          lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0xFF3D00), 0);
+    on_turn_off:
+      - lambda: |-
+          lv_label_set_text(id(lbl_start_stop), "START");
+          lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0x00E676), 0);
 
   - platform: template
     name: "Auto Advance"
     id: auto_advance_entity
     icon: "mdi:skip-next"
-    restore_mode: DISABLED
-    lambda: 'return id(ctrl_auto_advance_on);'
-    turn_on_action:
-      - script.execute: send_auto_advance_toggle
-    turn_off_action:
-      - script.execute: send_auto_advance_toggle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lvgl.label.update:
+          id: lbl_auto_adv
+          text: "AUTO: ON"
+    on_turn_off:
+      - lvgl.label.update:
+          id: lbl_auto_adv
+          text: "AUTO: OFF"
 
   - platform: template
     name: "Schedule Enabled"
     id: schedule_enabled_entity
     icon: "mdi:calendar-check"
-    restore_mode: DISABLED
-    lambda: 'return id(sched_enabled);'
-    turn_on_action:
-      - script.execute: send_schedule_toggle
-    turn_off_action:
-      - script.execute: send_schedule_toggle
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_enabled) = true;'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_enabled) = false;'
+      - script.execute: refresh_schedule_page
 
   - platform: template
     name: "Schedule Monday"
     id: day_mon_entity
     icon: "mdi:calendar"
-    restore_mode: DISABLED
-    lambda: 'return (id(sched_days) >> 0) & 1;'
-    turn_on_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Monday"
-    turn_off_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Monday"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_days) |= (1 << 0);'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_days) &= ~(1 << 0);'
+      - script.execute: refresh_schedule_page
 
   - platform: template
     name: "Schedule Tuesday"
     id: day_tue_entity
     icon: "mdi:calendar"
-    restore_mode: DISABLED
-    lambda: 'return (id(sched_days) >> 1) & 1;'
-    turn_on_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Tuesday"
-    turn_off_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Tuesday"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_days) |= (1 << 1);'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_days) &= ~(1 << 1);'
+      - script.execute: refresh_schedule_page
 
   - platform: template
     name: "Schedule Wednesday"
     id: day_wed_entity
     icon: "mdi:calendar"
-    restore_mode: DISABLED
-    lambda: 'return (id(sched_days) >> 2) & 1;'
-    turn_on_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Wednesday"
-    turn_off_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Wednesday"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_days) |= (1 << 2);'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_days) &= ~(1 << 2);'
+      - script.execute: refresh_schedule_page
 
   - platform: template
     name: "Schedule Thursday"
     id: day_thu_entity
     icon: "mdi:calendar"
-    restore_mode: DISABLED
-    lambda: 'return (id(sched_days) >> 3) & 1;'
-    turn_on_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Thursday"
-    turn_off_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Thursday"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_days) |= (1 << 3);'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_days) &= ~(1 << 3);'
+      - script.execute: refresh_schedule_page
 
   - platform: template
     name: "Schedule Friday"
     id: day_fri_entity
     icon: "mdi:calendar"
-    restore_mode: DISABLED
-    lambda: 'return (id(sched_days) >> 4) & 1;'
-    turn_on_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Friday"
-    turn_off_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Friday"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_days) |= (1 << 4);'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_days) &= ~(1 << 4);'
+      - script.execute: refresh_schedule_page
 
   - platform: template
     name: "Schedule Saturday"
     id: day_sat_entity
     icon: "mdi:calendar"
-    restore_mode: DISABLED
-    lambda: 'return (id(sched_days) >> 5) & 1;'
-    turn_on_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Saturday"
-    turn_off_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Saturday"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_days) |= (1 << 5);'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_days) &= ~(1 << 5);'
+      - script.execute: refresh_schedule_page
 
   - platform: template
     name: "Schedule Sunday"
     id: day_sun_entity
     icon: "mdi:calendar"
-    restore_mode: DISABLED
-    lambda: 'return (id(sched_days) >> 6) & 1;'
-    turn_on_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Sunday"
-    turn_off_action:
-      - script.execute:
-          id: send_day_toggle
-          day_name: "Sunday"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(sched_days) |= (1 << 6);'
+      - script.execute: refresh_schedule_page
+    on_turn_off:
+      - lambda: 'id(sched_days) &= ~(1 << 6);'
+      - script.execute: refresh_schedule_page
+
+  - platform: template
+    name: "Use 12 Hour Format"
+    id: use_12hour_entity
+    icon: "mdi:clock-time-four"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - lambda: 'id(use_12hour) = true;'
+    on_turn_off:
+      - lambda: 'id(use_12hour) = false;'
+
+  # Zone switches (1-32)
+  - platform: template
+    name: "Zone 1"
+    id: zone_1_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 0);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 0);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 2"
+    id: zone_2_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 1);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 1);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 3"
+    id: zone_3_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 2);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 2);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 4"
+    id: zone_4_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 3);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 3);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 5"
+    id: zone_5_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 4);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 4);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 6"
+    id: zone_6_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 5);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 5);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 7"
+    id: zone_7_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 6);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 6);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 8"
+    id: zone_8_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 7);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 7);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 9"
+    id: zone_9_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 8);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 8);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 10"
+    id: zone_10_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 9);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 9);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 11"
+    id: zone_11_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 10);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 10);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 12"
+    id: zone_12_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 11);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 11);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 13"
+    id: zone_13_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 12);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 12);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 14"
+    id: zone_14_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 13);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 13);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 15"
+    id: zone_15_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 14);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 14);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 16"
+    id: zone_16_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 15);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 15);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 17"
+    id: zone_17_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 16);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 16);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 18"
+    id: zone_18_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 17);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 17);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 19"
+    id: zone_19_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 18);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 18);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 20"
+    id: zone_20_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 19);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 19);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 21"
+    id: zone_21_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 20);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 20);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 22"
+    id: zone_22_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 21);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 21);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 23"
+    id: zone_23_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 22);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 22);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 24"
+    id: zone_24_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 23);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 23);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 25"
+    id: zone_25_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 24);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 24);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 26"
+    id: zone_26_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 25);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 25);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 27"
+    id: zone_27_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 26);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 26);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 28"
+    id: zone_28_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 27);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 27);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 29"
+    id: zone_29_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 28);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 28);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 30"
+    id: zone_30_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 29);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 29);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 31"
+    id: zone_31_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 30);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 30);'
+      - script.execute: refresh_zone_buttons
+  - platform: template
+    name: "Zone 32"
+    id: zone_32_switch
+    icon: "mdi:sprinkler"
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    on_turn_on:
+      - lambda: 'id(zone_states) |= (1u << 31);'
+      - script.execute: refresh_zone_buttons
+    on_turn_off:
+      - lambda: 'id(zone_states) &= ~(1u << 31);'
+      - script.execute: refresh_zone_buttons
 
 # ──────────────────────────────────────────────
-# Exposed Entities - Buttons (one-shot actions)
+# Buttons (one-shot actions)
 # ──────────────────────────────────────────────
 
 button:
@@ -769,778 +1506,106 @@ button:
     name: "Pause"
     id: pause_entity
     icon: "mdi:pause"
-    on_press:
-      - script.execute: send_pause
 
   - platform: template
     name: "Auto Detect Zones"
     id: auto_detect_entity
     icon: "mdi:magnify"
     entity_category: config
-    on_press:
-      - script.execute: auto_detect_zones
-
-  - platform: template
-    name: "Run Zone 1"
-    id: run_zone_1_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 1
-
-  - platform: template
-    name: "Run Zone 2"
-    id: run_zone_2_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 2
-
-  - platform: template
-    name: "Run Zone 3"
-    id: run_zone_3_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 3
-
-  - platform: template
-    name: "Run Zone 4"
-    id: run_zone_4_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 4
-
-  - platform: template
-    name: "Run Zone 5"
-    id: run_zone_5_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 5
-
-  - platform: template
-    name: "Run Zone 6"
-    id: run_zone_6_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 6
-
-  - platform: template
-    name: "Run Zone 7"
-    id: run_zone_7_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 7
-
-  - platform: template
-    name: "Run Zone 8"
-    id: run_zone_8_btn
-    icon: "mdi:sprinkler"
-    on_press:
-      - script.execute:
-          id: send_zone_on
-          zone_num: 8
-
-  - platform: template
-    name: "Stop Zone 1"
-    id: stop_zone_1_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 1
-
-  - platform: template
-    name: "Stop Zone 2"
-    id: stop_zone_2_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 2
-
-  - platform: template
-    name: "Stop Zone 3"
-    id: stop_zone_3_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 3
-
-  - platform: template
-    name: "Stop Zone 4"
-    id: stop_zone_4_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 4
-
-  - platform: template
-    name: "Stop Zone 5"
-    id: stop_zone_5_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 5
-
-  - platform: template
-    name: "Stop Zone 6"
-    id: stop_zone_6_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 6
-
-  - platform: template
-    name: "Stop Zone 7"
-    id: stop_zone_7_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 7
-
-  - platform: template
-    name: "Stop Zone 8"
-    id: stop_zone_8_btn
-    icon: "mdi:sprinkler-off"
-    on_press:
-      - script.execute:
-          id: send_zone_off
-          zone_num: 8
 
   - platform: restart
     name: "Restart"
-
-# ──────────────────────────────────────────────
-# Exposed Entities - Text (editable schedule times)
-# ──────────────────────────────────────────────
-
-text:
-  - platform: template
-    name: "Schedule Start Time 1"
-    id: sched_time_1_entity
-    icon: "mdi:clock-start"
-    optimistic: true
-    min_length: 0
-    max_length: 8
-    mode: text
-    initial_value: ""
-    set_action:
-      - lambda: |-
-          id(sched_time_1) = x.empty() ? "--:--" : x;
-      - script.execute:
-          id: send_schedule_time
-          slot: 1
-          time_str: !lambda 'return x;'
-
-  - platform: template
-    name: "Schedule Start Time 2"
-    id: sched_time_2_entity
-    icon: "mdi:clock-start"
-    optimistic: true
-    min_length: 0
-    max_length: 8
-    mode: text
-    initial_value: ""
-    set_action:
-      - lambda: |-
-          id(sched_time_2) = x.empty() ? "--:--" : x;
-      - script.execute:
-          id: send_schedule_time
-          slot: 2
-          time_str: !lambda 'return x;'
-
-  - platform: template
-    name: "Schedule Start Time 3"
-    id: sched_time_3_entity
-    icon: "mdi:clock-start"
-    optimistic: true
-    min_length: 0
-    max_length: 8
-    mode: text
-    initial_value: ""
-    set_action:
-      - lambda: |-
-          id(sched_time_3) = x.empty() ? "--:--" : x;
-      - script.execute:
-          id: send_schedule_time
-          slot: 3
-          time_str: !lambda 'return x;'
-
-  - platform: template
-    name: "Schedule Start Time 4"
-    id: sched_time_4_entity
-    icon: "mdi:clock-start"
-    optimistic: true
-    min_length: 0
-    max_length: 8
-    mode: text
-    initial_value: ""
-    set_action:
-      - lambda: |-
-          id(sched_time_4) = x.empty() ? "--:--" : x;
-      - script.execute:
-          id: send_schedule_time
-          slot: 4
-          time_str: !lambda 'return x;'
 
 # ──────────────────────────────────────────────
 # Scripts
 # ──────────────────────────────────────────────
 
 script:
-  # --- Status polling (ONE endpoint per tick, rotating through 5) ---
-  # Each tick does exactly 1 HTTP GET, max blocking = 2s (timeout)
-  # Cycle: status -> time_remaining -> progress -> main_switch -> auto_advance
-  - id: poll_status
-    then:
-      - if:
-          condition:
-            lambda: |-
-              if (!id(wifi_connected) || id(http_busy)) return false;
-              // Backoff: when disconnected from controller, skip most ticks
-              // After 3 errors, only try once per ~30s (6 ticks * 5s interval)
-              if (id(poll_error_count) >= 3) {
-                if (id(poll_backoff_ticks) > 0) {
-                  id(poll_backoff_ticks)--;
-                  return false;
-                }
-                id(poll_backoff_ticks) = 6;
-              }
-              return true;
-          then:
-            - lambda: |-
-                int step = id(poll_step);
-                id(poll_step) = (step + 1) % 5;
-            - if:
-                condition:
-                  lambda: 'return id(poll_step) == 1;'
-                then:
-                  - lambda: 'id(http_busy) = true;'
-                  - http_request.get:
-                      url: !lambda |-
-                        char url[128];
-                        snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Status",
-                                 id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                        return std::string(url);
-                      capture_response: true
-                      max_response_buffer_size: 512
-                      on_response:
-                        then:
-                          - lambda: |-
-                              id(http_busy) = false;
-                              if (response->status_code == 200) {
-                                id(poll_error_count) = 0;
-                                id(poll_backoff_ticks) = 0;
-                                id(controller_connected) = true;
-                                json::parse_json(body, [](JsonObject root) -> bool {
-                                  if (root["state"].is<const char*>()) {
-                                    id(ctrl_valve_status) = root["state"].as<std::string>();
-                                  }
-                                  return true;
-                                });
-                                lv_label_set_text(id(lbl_valve_status), id(ctrl_valve_status).c_str());
-                                std::string s = id(ctrl_valve_status);
-                                size_t active_pos = s.find("Active");
-                                if (active_pos != std::string::npos) {
-                                  lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
-                                  std::string zone_num = "--";
-                                  for (size_t i = 0; i < active_pos; i++) {
-                                    if (isdigit(s[i])) {
-                                      size_t start = i;
-                                      while (i < active_pos && isdigit(s[i])) i++;
-                                      zone_num = s.substr(start, i - start);
-                                      break;
-                                    }
-                                  }
-                                  id(ctrl_active_zone) = zone_num;
-                                  lv_label_set_text(id(lbl_big_zone), zone_num.c_str());
-                                } else {
-                                  id(ctrl_active_zone) = "--";
-                                  if (s == "Idle" || s == "System Ready") {
-                                    lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x00E676), 0);
-                                  } else if (s.find("Rain") != std::string::npos) {
-                                    lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0x2979FF), 0);
-                                  } else if (s == "Paused") {
-                                    lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFAB00), 0);
-                                  } else {
-                                    lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFFFFFF), 0);
-                                  }
-                                  if (id(zone_active_showing)) {
-                                    id(zone_active_showing) = false;
-                                    lv_scr_load(id(page_status)->obj);
-                                  }
-                                }
-                                lv_label_set_text(id(lbl_connection), "Connected");
-                                lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0x00E676), 0);
-                              } else {
-                                id(poll_error_count)++;
-                              }
-                      on_error:
-                        then:
-                          - lambda: |-
-                              id(http_busy) = false;
-                              id(poll_error_count)++;
-            - if:
-                condition:
-                  lambda: 'return id(poll_step) == 2;'
-                then:
-                  - lambda: 'id(http_busy) = true;'
-                  - http_request.get:
-                      url: !lambda |-
-                        char url[128];
-                        snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Time%%20Remaining",
-                                 id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                        return std::string(url);
-                      capture_response: true
-                      max_response_buffer_size: 256
-                      on_response:
-                        then:
-                          - lambda: |-
-                              id(http_busy) = false;
-                              if (response->status_code == 200) {
-                                json::parse_json(body, [](JsonObject root) -> bool {
-                                  if (root["state"].is<const char*>()) {
-                                    id(ctrl_time_remaining) = root["state"].as<std::string>();
-                                  }
-                                  return true;
-                                });
-                                char buf[24];
-                                snprintf(buf, sizeof(buf), "Time: %s", id(ctrl_time_remaining).c_str());
-                                lv_label_set_text(id(lbl_time_remaining), buf);
-                                lv_label_set_text(id(lbl_big_remaining), id(ctrl_time_remaining).c_str());
-                              }
-                      on_error:
-                        then:
-                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
-            - if:
-                condition:
-                  lambda: 'return id(poll_step) == 3;'
-                then:
-                  - lambda: 'id(http_busy) = true;'
-                  - http_request.get:
-                      url: !lambda |-
-                        char url[128];
-                        snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Progress",
-                                 id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                        return std::string(url);
-                      capture_response: true
-                      max_response_buffer_size: 256
-                      on_response:
-                        then:
-                          - lambda: |-
-                              id(http_busy) = false;
-                              if (response->status_code == 200) {
-                                json::parse_json(body, [](JsonObject root) -> bool {
-                                  if (root["state"].is<const char*>()) {
-                                    id(ctrl_progress) = root["state"].as<std::string>();
-                                  }
-                                  return true;
-                                });
-                                lv_label_set_text(id(lbl_progress), id(ctrl_progress).c_str());
-                                int pct = atoi(id(ctrl_progress).c_str());
-                                lv_bar_set_value(id(bar_progress), pct, LV_ANIM_ON);
-                              }
-                      on_error:
-                        then:
-                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
-            - if:
-                condition:
-                  lambda: 'return id(poll_step) == 4;'
-                then:
-                  - lambda: 'id(http_busy) = true;'
-                  - http_request.get:
-                      url: !lambda |-
-                        char url[128];
-                        snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume",
-                                 id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                        return std::string(url);
-                      capture_response: true
-                      max_response_buffer_size: 256
-                      on_response:
-                        then:
-                          - lambda: |-
-                              id(http_busy) = false;
-                              if (response->status_code == 200) {
-                                json::parse_json(body, [](JsonObject root) -> bool {
-                                  if (root["value"].is<bool>()) {
-                                    id(ctrl_main_switch_on) = root["value"].as<bool>();
-                                  }
-                                  return true;
-                                });
-                                if (id(ctrl_main_switch_on)) {
-                                  lv_label_set_text(id(lbl_start_stop), "STOP");
-                                  lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0xFF3D00), 0);
-                                } else {
-                                  lv_label_set_text(id(lbl_start_stop), "START");
-                                  lv_obj_set_style_bg_color(id(btn_start_stop), lv_color_hex(0x00E676), 0);
-                                }
-                              }
-                      on_error:
-                        then:
-                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
-            - if:
-                condition:
-                  lambda: 'return id(poll_step) == 0;'
-                then:
-                  - lambda: 'id(http_busy) = true;'
-                  - http_request.get:
-                      url: !lambda |-
-                        char url[128];
-                        snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance",
-                                 id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                        return std::string(url);
-                      capture_response: true
-                      max_response_buffer_size: 256
-                      on_response:
-                        then:
-                          - lambda: |-
-                              id(http_busy) = false;
-                              if (response->status_code == 200) {
-                                json::parse_json(body, [](JsonObject root) -> bool {
-                                  if (root["value"].is<bool>()) {
-                                    id(ctrl_auto_advance_on) = root["value"].as<bool>();
-                                  }
-                                  return true;
-                                });
-                                if (id(ctrl_auto_advance_on)) {
-                                  lv_label_set_text(id(lbl_auto_adv), "AUTO: ON");
-                                } else {
-                                  lv_label_set_text(id(lbl_auto_adv), "AUTO: OFF");
-                                }
-                              }
-                      on_error:
-                        then:
-                          - lambda: 'id(http_busy) = false; id(poll_error_count)++;'
-            # Check error count after any step
-            - lambda: |-
-                if (id(poll_error_count) >= 3) {
-                  id(controller_connected) = false;
-                  lv_label_set_text(id(lbl_connection), "Disconnected");
-                  lv_obj_set_style_text_color(id(lbl_connection), lv_color_hex(0xFF1744), 0);
-                  lv_label_set_text(id(lbl_valve_status), "Disconnected");
-                  lv_obj_set_style_text_color(id(lbl_valve_status), lv_color_hex(0xFF1744), 0);
-                }
-
-  # --- Zone state polling (1 zone per tick, rotating) ---
-  - id: poll_zone_states
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && !id(http_busy) && id(controller_connected) && id(zone_count) > 0;'
-          then:
-            - lambda: |-
-                id(zone_poll_idx) = id(zone_poll_idx) % id(zone_count);
-                id(http_busy) = true;
-            - http_request.get:
-                url: !lambda |-
-                  char url[128];
-                  int zone = id(zone_poll_idx) + 1;
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone);
-                  return std::string(url);
-                capture_response: true
-                max_response_buffer_size: 256
-                on_response:
-                  then:
-                    - lambda: |-
-                        id(http_busy) = false;
-                        if (response->status_code == 200) {
-                          int zone = id(zone_poll_idx);
-                          json::parse_json(body, [zone](JsonObject root) -> bool {
-                            if (root["value"].is<bool>()) {
-                              bool on = root["value"].as<bool>();
-                              if (on) {
-                                id(zone_states) |= (1u << zone);
-                              } else {
-                                id(zone_states) &= ~(1u << zone);
-                              }
-                            }
-                            return true;
-                          });
-                        }
-                        id(zone_poll_idx) = (id(zone_poll_idx) + 1) % id(zone_count);
-                on_error:
-                  then:
-                    - lambda: |-
-                        id(http_busy) = false;
-                        id(zone_poll_idx) = (id(zone_poll_idx) + 1) % id(zone_count);
-
-  # --- Schedule polling (ONE endpoint per tick, rotating through 12) ---
-  # Cycle: sched_enabled, Mon-Sun (7 days), start_time_1-4
-  # At 30s interval, full cycle = 12*30s = 6 min (schedule rarely changes)
-  - id: poll_schedule
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && !id(http_busy) && id(controller_connected);'
-          then:
-            - lambda: |-
-                int step = id(sched_poll_step);
-                id(sched_poll_step) = (step + 1) % 12;
-                id(http_busy) = true;
-            - http_request.get:
-                url: !lambda |-
-                  char url[128];
-                  int step = (id(sched_poll_step) + 11) % 12;  // get the step we just set (before increment)
-                  if (step == 0) {
-                    snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled",
-                             id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                  } else if (step >= 1 && step <= 7) {
-                    const char* days[] = {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"};
-                    snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20%s",
-                             id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), days[step - 1]);
-                  } else {
-                    int slot = step - 7;  // 1-4
-                    snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%20%d",
-                             id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), slot);
-                  }
-                  return std::string(url);
-                capture_response: true
-                max_response_buffer_size: 256
-                on_response:
-                  then:
-                    - lambda: |-
-                        id(http_busy) = false;
-                        if (response->status_code == 200) {
-                          int step = (id(sched_poll_step) + 11) % 12;
-                          if (step == 0) {
-                            // Schedule enabled
-                            json::parse_json(body, [](JsonObject root) -> bool {
-                              if (root["value"].is<bool>()) {
-                                id(sched_enabled) = root["value"].as<bool>();
-                              }
-                              return true;
-                            });
-                          } else if (step >= 1 && step <= 7) {
-                            // Day of week (bit index = step - 1)
-                            int day_bit = step - 1;
-                            json::parse_json(body, [day_bit](JsonObject root) -> bool {
-                              if (root["value"].is<bool>()) {
-                                if (root["value"].as<bool>()) id(sched_days) |= (1 << day_bit);
-                                else id(sched_days) &= ~(1 << day_bit);
-                              }
-                              return true;
-                            });
-                          } else {
-                            // Start time (slot = step - 7, 1-4)
-                            int slot = step - 7;
-                            json::parse_json(body, [slot](JsonObject root) -> bool {
-                              if (root["state"].is<const char*>()) {
-                                std::string val = root["state"].as<std::string>();
-                                if (val.empty()) val = "--:--";
-                                switch(slot) {
-                                  case 1: id(sched_time_1) = val; break;
-                                  case 2: id(sched_time_2) = val; break;
-                                  case 3: id(sched_time_3) = val; break;
-                                  case 4: id(sched_time_4) = val; break;
-                                }
-                              }
-                              return true;
-                            });
-                          }
-                        }
-                on_error:
-                  then:
-                    - lambda: 'id(http_busy) = false;'
-
-  # --- Command scripts (only fire if controller is reachable) ---
-  - id: send_main_toggle
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Start%%2FStop%%2FResume/toggle",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                  return std::string(url);
-
-  - id: send_pause
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/button/Pause/press",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                  return std::string(url);
-
-  - id: send_auto_advance_toggle
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Auto%%20Advance/toggle",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                  return std::string(url);
-
-  - id: send_zone_on
+  # Helper: toggle a zone switch by number (1-32)
+  - id: toggle_zone
     parameters:
       zone_num: int
     then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_on",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
-                  return std::string(url);
+      - lambda: |-
+          esphome::template_::TemplateSwitch* sw[] = {
+            id(zone_1_switch), id(zone_2_switch), id(zone_3_switch), id(zone_4_switch),
+            id(zone_5_switch), id(zone_6_switch), id(zone_7_switch), id(zone_8_switch),
+            id(zone_9_switch), id(zone_10_switch), id(zone_11_switch), id(zone_12_switch),
+            id(zone_13_switch), id(zone_14_switch), id(zone_15_switch), id(zone_16_switch),
+            id(zone_17_switch), id(zone_18_switch), id(zone_19_switch), id(zone_20_switch),
+            id(zone_21_switch), id(zone_22_switch), id(zone_23_switch), id(zone_24_switch),
+            id(zone_25_switch), id(zone_26_switch), id(zone_27_switch), id(zone_28_switch),
+            id(zone_29_switch), id(zone_30_switch), id(zone_31_switch), id(zone_32_switch)
+          };
+          if (zone_num >= 1 && zone_num <= 32) sw[zone_num - 1]->toggle();
 
-  - id: send_zone_off
+  # Helper: turn on a zone switch by number (1-32)
+  - id: turn_on_zone
     parameters:
       zone_num: int
     then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/turn_off",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
-                  return std::string(url);
+      - lambda: |-
+          esphome::template_::TemplateSwitch* sw[] = {
+            id(zone_1_switch), id(zone_2_switch), id(zone_3_switch), id(zone_4_switch),
+            id(zone_5_switch), id(zone_6_switch), id(zone_7_switch), id(zone_8_switch),
+            id(zone_9_switch), id(zone_10_switch), id(zone_11_switch), id(zone_12_switch),
+            id(zone_13_switch), id(zone_14_switch), id(zone_15_switch), id(zone_16_switch),
+            id(zone_17_switch), id(zone_18_switch), id(zone_19_switch), id(zone_20_switch),
+            id(zone_21_switch), id(zone_22_switch), id(zone_23_switch), id(zone_24_switch),
+            id(zone_25_switch), id(zone_26_switch), id(zone_27_switch), id(zone_28_switch),
+            id(zone_29_switch), id(zone_30_switch), id(zone_31_switch), id(zone_32_switch)
+          };
+          if (zone_num >= 1 && zone_num <= 32) sw[zone_num - 1]->turn_on();
 
-  - id: send_zone_toggle
-    parameters:
-      zone_num: int
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Zone%%20%d/toggle",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num);
-                  return std::string(url);
-
-  - id: send_duration_set
+  # Helper: set zone duration by zone number
+  - id: set_zone_duration
     parameters:
       zone_num: int
       duration_val: int
     then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/number/Zone%%20%d%%20Duration/set?value=%d",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), zone_num, duration_val);
-                  return std::string(url);
+      - lambda: |-
+          esphome::template_::TemplateNumber* nums[] = {
+            id(zone_1_dur_entity), id(zone_2_dur_entity), id(zone_3_dur_entity), id(zone_4_dur_entity),
+            id(zone_5_dur_entity), id(zone_6_dur_entity), id(zone_7_dur_entity), id(zone_8_dur_entity),
+            id(zone_9_dur_entity), id(zone_10_dur_entity), id(zone_11_dur_entity), id(zone_12_dur_entity),
+            id(zone_13_dur_entity), id(zone_14_dur_entity), id(zone_15_dur_entity), id(zone_16_dur_entity),
+            id(zone_17_dur_entity), id(zone_18_dur_entity), id(zone_19_dur_entity), id(zone_20_dur_entity),
+            id(zone_21_dur_entity), id(zone_22_dur_entity), id(zone_23_dur_entity), id(zone_24_dur_entity),
+            id(zone_25_dur_entity), id(zone_26_dur_entity), id(zone_27_dur_entity), id(zone_28_dur_entity),
+            id(zone_29_dur_entity), id(zone_30_dur_entity), id(zone_31_dur_entity), id(zone_32_dur_entity)
+          };
+          if (zone_num >= 1 && zone_num <= 32) {
+            auto call = nums[zone_num - 1]->make_call();
+            call.set_value(duration_val);
+            call.perform();
+          }
 
-  - id: send_schedule_toggle
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule%%20Enabled/toggle",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                  return std::string(url);
-
-  - id: send_day_toggle
+  # Helper: get zone duration by zone number (returns value to slider)
+  - id: load_zone_duration
     parameters:
-      day_name: string
+      zone_num: int
     then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/switch/Schedule:%%20%s/toggle",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), day_name.c_str());
-                  return std::string(url);
+      - lambda: |-
+          esphome::template_::TemplateNumber* nums[] = {
+            id(zone_1_dur_entity), id(zone_2_dur_entity), id(zone_3_dur_entity), id(zone_4_dur_entity),
+            id(zone_5_dur_entity), id(zone_6_dur_entity), id(zone_7_dur_entity), id(zone_8_dur_entity),
+            id(zone_9_dur_entity), id(zone_10_dur_entity), id(zone_11_dur_entity), id(zone_12_dur_entity),
+            id(zone_13_dur_entity), id(zone_14_dur_entity), id(zone_15_dur_entity), id(zone_16_dur_entity),
+            id(zone_17_dur_entity), id(zone_18_dur_entity), id(zone_19_dur_entity), id(zone_20_dur_entity),
+            id(zone_21_dur_entity), id(zone_22_dur_entity), id(zone_23_dur_entity), id(zone_24_dur_entity),
+            id(zone_25_dur_entity), id(zone_26_dur_entity), id(zone_27_dur_entity), id(zone_28_dur_entity),
+            id(zone_29_dur_entity), id(zone_30_dur_entity), id(zone_31_dur_entity), id(zone_32_dur_entity)
+          };
+          if (zone_num >= 1 && zone_num <= 32) {
+            float val = nums[zone_num - 1]->state;
+            if (std::isnan(val)) val = 2;
+            lv_slider_set_value(id(slider_duration), (int)val, LV_ANIM_OFF);
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d min", (int)val);
+            lv_label_set_text(id(lbl_dur_value), buf);
+          }
 
-  - id: send_schedule_time
-    parameters:
-      slot: int
-      time_str: string
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.post:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text/Schedule%%20Start%%20Time%%20%d/set?value=%s",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4), slot, time_str.c_str());
-                  return std::string(url);
-
-  - id: auto_detect_zones
-    then:
-      - if:
-          condition:
-            lambda: 'return id(wifi_connected) && id(controller_connected);'
-          then:
-            - http_request.get:
-                url: !lambda |-
-                  char url[128];
-                  snprintf(url, sizeof(url), "http://%d.%d.%d.%d/text_sensor/Detected%%20Zones",
-                           id(ip_octet_1), id(ip_octet_2), id(ip_octet_3), id(ip_octet_4));
-                  return std::string(url);
-                capture_response: true
-                max_response_buffer_size: 256
-                on_response:
-                  then:
-                    - lambda: |-
-                        if (response->status_code == 200) {
-                          json::parse_json(body, [](JsonObject root) -> bool {
-                            if (root["state"].is<const char*>()) {
-                              std::string s = root["state"].as<std::string>();
-                              // Parse "8 zones (no expansion boards)" or "16 zones (0x20)"
-                              int n = atoi(s.c_str());
-                              if (n >= 1 && n <= 32) {
-                                id(zone_count) = n;
-                                lv_slider_set_value(id(slider_zone_count), n, LV_ANIM_ON);
-                                char buf[4];
-                                snprintf(buf, sizeof(buf), "%d", n);
-                                lv_label_set_text(id(lbl_zone_count_val), buf);
-                              }
-                            }
-                            return true;
-                          });
-                        }
-
-  # --- Helper: refresh zone page buttons ---
+  # Helper: refresh zone page buttons
   - id: refresh_zone_buttons
     then:
       - lambda: |-
@@ -1574,7 +1639,7 @@ script:
           snprintf(title, sizeof(title), "ZONES %d-%d", offset + 1, last);
           lv_label_set_text(id(lbl_zone_page_title), title);
 
-  # --- Helper: refresh schedule page ---
+  # Helper: refresh schedule page
   - id: refresh_schedule_page
     then:
       - lambda: |-
@@ -1587,7 +1652,6 @@ script:
             lv_obj_set_style_text_color(id(lbl_sched_enabled), lv_color_hex(0xFF3D00), 0);
           }
           // Update day buttons
-          const char* day_labels[] = {"M", "T", "W", "T", "F", "S", "S"};
           lv_obj_t* day_btns[] = {id(btn_day_mon), id(btn_day_tue), id(btn_day_wed),
                                    id(btn_day_thu), id(btn_day_fri), id(btn_day_sat), id(btn_day_sun)};
           for (int i = 0; i < 7; i++) {
@@ -1609,42 +1673,48 @@ script:
           snprintf(buf, sizeof(buf), "4: %s", id(sched_time_4).c_str());
           lv_label_set_text(id(lbl_sched_t4), buf);
 
+  # Helper: update time editor display
+  - id: update_time_display
+    then:
+      - lambda: |-
+          int h = id(time_edit_hour);
+          int m = id(time_edit_minute);
+          char buf[16];
+          if (id(use_12hour)) {
+            int h12 = h % 12;
+            if (h12 == 0) h12 = 12;
+            const char* ampm = (h < 12) ? "AM" : "PM";
+            snprintf(buf, sizeof(buf), "%d:%02d %s", h12, m, ampm);
+            // Show AM/PM button
+            lv_obj_clear_flag(id(btn_ampm), LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(id(lbl_ampm), ampm);
+          } else {
+            snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
+            // Hide AM/PM button
+            lv_obj_add_flag(id(btn_ampm), LV_OBJ_FLAG_HIDDEN);
+          }
+          lv_label_set_text(id(lbl_time_display), buf);
+
 # ──────────────────────────────────────────────
 # Intervals
 # ──────────────────────────────────────────────
 
 interval:
-  # Each poll does exactly 1 HTTP GET (max 2s timeout), rotating through endpoints
-  - interval: 5s
-    then:
-      - script.execute: poll_status   # 5 endpoints, 1 per tick = full refresh every 25s
-
-  - interval: 10s
-    then:
-      - script.execute: poll_zone_states  # 1 zone per tick, cycles through all
-
-  - interval: 30s
-    then:
-      - script.execute: poll_schedule  # 12 endpoints, 1 per tick = full refresh every 6min
-
   # Idle timeout: return to active zone page after 60s of no interaction
-  # Uses LVGL's built-in inactivity tracker (touch + encoder + button)
   - interval: 5s
     then:
       - lambda: |-
-          // If a zone is active and user hasn't interacted in 60s, show the active zone page
-          if (id(ctrl_active_zone) != "--" && !id(zone_active_showing)) {
+          std::string az = id(active_zone_entity).state;
+          if (az != "--" && !az.empty() && !id(zone_active_showing)) {
             uint32_t idle_ms = lv_disp_get_inactive_time(NULL);
             if (idle_ms >= 60000) {
               id(zone_active_showing) = true;
               lv_scr_load(id(page_active_zone)->obj);
             }
           }
-          // If active zone page showing and user interacts, exit it
           if (id(zone_active_showing)) {
             uint32_t idle_ms = lv_disp_get_inactive_time(NULL);
             if (idle_ms < 1000) {
-              // Recent interaction detected - exit active zone view
               id(zone_active_showing) = false;
               lv_scr_load(id(page_status)->obj);
             }
@@ -1744,7 +1814,7 @@ lvgl:
 
         - label:
             id: lbl_connection
-            text: "Disconnected"
+            text: "HA Disconnected"
             text_font: montserrat_10
             text_color: 0xFF1744
             align: TOP_MID
@@ -1805,7 +1875,7 @@ lvgl:
                   text_color: 0x0D0D0D
             on_click:
               then:
-                - script.execute: send_main_toggle
+                - switch.toggle: main_switch_entity
 
         - button:
             id: btn_pause
@@ -1822,7 +1892,7 @@ lvgl:
                   text_color: 0x00E676
             on_click:
               then:
-                - script.execute: send_pause
+                - button.press: pause_entity
 
         # Row 2: AUTO ADV + ZONES
         - button:
@@ -1841,7 +1911,7 @@ lvgl:
                   text_color: 0x00E676
             on_click:
               then:
-                - script.execute: send_auto_advance_toggle
+                - switch.toggle: auto_advance_entity
 
         - button:
             id: btn_goto_zones
@@ -1947,7 +2017,7 @@ lvgl:
               then:
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 1;'
                 - script.execute:
-                    id: send_zone_toggle
+                    id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 1;'
 
         - button:
@@ -1968,7 +2038,7 @@ lvgl:
               then:
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 2;'
                 - script.execute:
-                    id: send_zone_toggle
+                    id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 2;'
 
         - button:
@@ -1989,7 +2059,7 @@ lvgl:
               then:
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 3;'
                 - script.execute:
-                    id: send_zone_toggle
+                    id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 3;'
 
         - button:
@@ -2010,7 +2080,7 @@ lvgl:
               then:
                 - lambda: 'id(last_selected_zone) = id(zone_page_offset) + 4;'
                 - script.execute:
-                    id: send_zone_toggle
+                    id: toggle_zone
                     zone_num: !lambda 'return id(zone_page_offset) + 4;'
 
         # Nav: PREV / NEXT
@@ -2090,7 +2160,7 @@ lvgl:
             on_click:
               then:
                 - script.execute:
-                    id: send_zone_on
+                    id: turn_on_zone
                     zone_num: !lambda 'return id(last_selected_zone);'
 
         - button:
@@ -2124,6 +2194,9 @@ lvgl:
               char buf[16];
               snprintf(buf, sizeof(buf), "Zone %d", id(dur_selected_zone));
               lv_label_set_text(id(lbl_dur_zone_name), buf);
+          - script.execute:
+              id: load_zone_duration
+              zone_num: !lambda 'return id(dur_selected_zone);'
       widgets:
         - label:
             text: "ZONE DURATION"
@@ -2154,6 +2227,9 @@ lvgl:
                       snprintf(buf, sizeof(buf), "Zone %d", id(dur_selected_zone));
                       lv_label_set_text(id(lbl_dur_zone_name), buf);
                     }
+                - script.execute:
+                    id: load_zone_duration
+                    zone_num: !lambda 'return id(dur_selected_zone);'
 
         - label:
             id: lbl_dur_zone_name
@@ -2185,6 +2261,9 @@ lvgl:
                       snprintf(buf, sizeof(buf), "Zone %d", id(dur_selected_zone));
                       lv_label_set_text(id(lbl_dur_zone_name), buf);
                     }
+                - script.execute:
+                    id: load_zone_duration
+                    zone_num: !lambda 'return id(dur_selected_zone);'
 
         - label:
             id: lbl_dur_value
@@ -2235,10 +2314,9 @@ lvgl:
             on_click:
               then:
                 - script.execute:
-                    id: send_duration_set
+                    id: set_zone_duration
                     zone_num: !lambda 'return id(dur_selected_zone);'
                     duration_val: !lambda 'return lv_slider_get_value(id(slider_duration));'
-
 
         - button:
             id: btn_dur_back
@@ -2301,10 +2379,7 @@ lvgl:
                   text_color: 0xFF3D00
             on_click:
               then:
-                - script.execute: send_schedule_toggle
-                - lambda: |-
-                    id(sched_enabled) = !id(sched_enabled);
-                - script.execute: refresh_schedule_page
+                - switch.toggle: schedule_enabled_entity
 
         # Day of week buttons (7 in a row)
         - button:
@@ -2323,11 +2398,7 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
-                - script.execute:
-                    id: send_day_toggle
-                    day_name: "Monday"
-                - lambda: 'id(sched_days) ^= (1 << 0);'
-                - script.execute: refresh_schedule_page
+                - switch.toggle: day_mon_entity
 
         - button:
             id: btn_day_tue
@@ -2345,11 +2416,7 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
-                - script.execute:
-                    id: send_day_toggle
-                    day_name: "Tuesday"
-                - lambda: 'id(sched_days) ^= (1 << 1);'
-                - script.execute: refresh_schedule_page
+                - switch.toggle: day_tue_entity
 
         - button:
             id: btn_day_wed
@@ -2367,11 +2434,7 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
-                - script.execute:
-                    id: send_day_toggle
-                    day_name: "Wednesday"
-                - lambda: 'id(sched_days) ^= (1 << 2);'
-                - script.execute: refresh_schedule_page
+                - switch.toggle: day_wed_entity
 
         - button:
             id: btn_day_thu
@@ -2389,11 +2452,7 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
-                - script.execute:
-                    id: send_day_toggle
-                    day_name: "Thursday"
-                - lambda: 'id(sched_days) ^= (1 << 3);'
-                - script.execute: refresh_schedule_page
+                - switch.toggle: day_thu_entity
 
         - button:
             id: btn_day_fri
@@ -2411,11 +2470,7 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
-                - script.execute:
-                    id: send_day_toggle
-                    day_name: "Friday"
-                - lambda: 'id(sched_days) ^= (1 << 4);'
-                - script.execute: refresh_schedule_page
+                - switch.toggle: day_fri_entity
 
         - button:
             id: btn_day_sat
@@ -2433,11 +2488,7 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
-                - script.execute:
-                    id: send_day_toggle
-                    day_name: "Saturday"
-                - lambda: 'id(sched_days) ^= (1 << 5);'
-                - script.execute: refresh_schedule_page
+                - switch.toggle: day_sat_entity
 
         - button:
             id: btn_day_sun
@@ -2455,11 +2506,7 @@ lvgl:
                   text_color: 0xFFFFFF
             on_click:
               then:
-                - script.execute:
-                    id: send_day_toggle
-                    day_name: "Sunday"
-                - lambda: 'id(sched_days) ^= (1 << 6);'
-                - script.execute: refresh_schedule_page
+                - switch.toggle: day_sun_entity
 
         # Start time displays (2x2)
         - label:
@@ -2530,7 +2577,7 @@ lvgl:
                     id: page_status
                     animation: NONE
 
-    # ──────── PAGE: TIME EDITOR ────────
+    # ──────── PAGE: TIME EDITOR (Redesigned — encoder +/- buttons) ────────
     - id: page_time_edit
       bg_color: 0x0D0D0D
       bg_opa: COVER
@@ -2539,9 +2586,26 @@ lvgl:
           - lambda: |-
               if (id(enc_indev) != nullptr)
                 lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_time_edit));
+              // Update title
               char buf[24];
               snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
               lv_label_set_text(id(lbl_time_edit_title), buf);
+              // Parse current time from sched_time global
+              std::string current;
+              int slot = id(time_edit_slot);
+              if (slot == 1) current = id(sched_time_1);
+              else if (slot == 2) current = id(sched_time_2);
+              else if (slot == 3) current = id(sched_time_3);
+              else current = id(sched_time_4);
+              // Parse HH:MM
+              if (current.length() >= 5 && current[2] == ':') {
+                id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
+                id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
+              } else {
+                id(time_edit_hour) = 6;
+                id(time_edit_minute) = 0;
+              }
+          - script.execute: update_time_display
       widgets:
         - label:
             id: lbl_time_edit_title
@@ -2549,15 +2613,15 @@ lvgl:
             text_font: montserrat_12
             text_color: 0x888888
             align: TOP_MID
-            y: 22
+            y: 18
 
         # Slot selector
         - button:
             id: btn_slot_prev
             x: 40
-            y: 40
+            y: 36
             width: 40
-            height: 26
+            height: 24
             styles: style_btn_outline
             widgets:
               - label:
@@ -2573,22 +2637,29 @@ lvgl:
                       char buf[24];
                       snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
                       lv_label_set_text(id(lbl_time_edit_title), buf);
+                      // Load time for new slot
+                      std::string current;
+                      int slot = id(time_edit_slot);
+                      if (slot == 1) current = id(sched_time_1);
+                      else if (slot == 2) current = id(sched_time_2);
+                      else if (slot == 3) current = id(sched_time_3);
+                      else current = id(sched_time_4);
+                      if (current.length() >= 5 && current[2] == ':') {
+                        id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
+                        id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
+                      } else {
+                        id(time_edit_hour) = 6;
+                        id(time_edit_minute) = 0;
+                      }
                     }
-
-        - label:
-            id: lbl_time_edit_slot
-            text: "Slot 1"
-            text_font: montserrat_14
-            text_color: 0x00E676
-            align: TOP_MID
-            y: 44
+                - script.execute: update_time_display
 
         - button:
             id: btn_slot_next
             x: 160
-            y: 40
+            y: 36
             width: 40
-            height: 26
+            height: 24
             styles: style_btn_outline
             widgets:
               - label:
@@ -2604,7 +2675,21 @@ lvgl:
                       char buf[24];
                       snprintf(buf, sizeof(buf), "START TIME %d", id(time_edit_slot));
                       lv_label_set_text(id(lbl_time_edit_title), buf);
+                      std::string current;
+                      int slot = id(time_edit_slot);
+                      if (slot == 1) current = id(sched_time_1);
+                      else if (slot == 2) current = id(sched_time_2);
+                      else if (slot == 3) current = id(sched_time_3);
+                      else current = id(sched_time_4);
+                      if (current.length() >= 5 && current[2] == ':') {
+                        id(time_edit_hour) = atoi(current.substr(0, 2).c_str());
+                        id(time_edit_minute) = atoi(current.substr(3, 2).c_str());
+                      } else {
+                        id(time_edit_hour) = 6;
+                        id(time_edit_minute) = 0;
+                      }
                     }
+                - script.execute: update_time_display
 
         # Time display
         - label:
@@ -2613,89 +2698,117 @@ lvgl:
             text_font: montserrat_28
             text_color: 0xFFFFFF
             align: CENTER
-            y: -22
+            y: -26
 
-        # Hour slider
-        - label:
-            text: "Hr"
-            text_font: montserrat_10
-            text_color: 0x888888
-            x: 24
-            y: 108
-        - slider:
-            id: slider_hour
-            x: 46
-            y: 108
-            width: 140
-            height: 12
-            min_value: 0
-            max_value: 23
-            value: 6
-            bg_color: 0x1A1A1A
-            indicator:
-              bg_color: 0x00E676
-            knob:
-              bg_color: 0xFFFFFF
-              radius: 6
-            on_value:
+        # Hour +/- buttons
+        - button:
+            id: btn_hour_up
+            x: 28
+            y: 100
+            width: 44
+            height: 24
+            styles: style_btn_outline
+            widgets:
+              - label:
+                  text: "HR+"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
               then:
                 - lambda: |-
-                    int h = lv_slider_get_value(id(slider_hour));
-                    int m = lv_slider_get_value(id(slider_minute));
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
-                    lv_label_set_text(id(lbl_time_display), buf);
-        - label:
-            id: lbl_hour_val
-            text: "6"
-            text_font: montserrat_10
-            text_color: 0x00E676
-            x: 194
-            y: 108
+                    id(time_edit_hour) = (id(time_edit_hour) + 1) % 24;
+                - script.execute: update_time_display
 
-        # Minute slider
-        - label:
-            text: "Mn"
-            text_font: montserrat_10
-            text_color: 0x888888
-            x: 24
-            y: 128
-        - slider:
-            id: slider_minute
-            x: 46
-            y: 128
-            width: 140
-            height: 12
-            min_value: 0
-            max_value: 59
-            value: 0
-            bg_color: 0x1A1A1A
-            indicator:
-              bg_color: 0x00E676
-            knob:
-              bg_color: 0xFFFFFF
-              radius: 6
-            on_value:
+        - button:
+            id: btn_hour_down
+            x: 76
+            y: 100
+            width: 44
+            height: 24
+            styles: style_btn_outline
+            widgets:
+              - label:
+                  text: "HR-"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
               then:
                 - lambda: |-
-                    int h = lv_slider_get_value(id(slider_hour));
-                    int m = lv_slider_get_value(id(slider_minute));
-                    char buf[8];
-                    snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
-                    lv_label_set_text(id(lbl_time_display), buf);
-        - label:
-            id: lbl_min_val
-            text: "0"
-            text_font: montserrat_10
-            text_color: 0x00E676
-            x: 194
-            y: 128
+                    id(time_edit_hour) = (id(time_edit_hour) + 23) % 24;
+                - script.execute: update_time_display
+
+        # Minute +/- buttons
+        - button:
+            id: btn_min_up
+            x: 124
+            y: 100
+            width: 44
+            height: 24
+            styles: style_btn_outline
+            widgets:
+              - label:
+                  text: "MN+"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    id(time_edit_minute) = (id(time_edit_minute) + 1) % 60;
+                - script.execute: update_time_display
+
+        - button:
+            id: btn_min_down
+            x: 172
+            y: 100
+            width: 44
+            height: 24
+            styles: style_btn_outline
+            widgets:
+              - label:
+                  text: "MN-"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    id(time_edit_minute) = (id(time_edit_minute) + 59) % 60;
+                - script.execute: update_time_display
+
+        # AM/PM toggle (visible only in 12hr mode)
+        - button:
+            id: btn_ampm
+            align: TOP_MID
+            y: 130
+            width: 60
+            height: 22
+            styles: style_btn_outline
+            widgets:
+              - label:
+                  id: lbl_ampm
+                  text: "AM"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - lambda: |-
+                    // Toggle AM/PM by flipping 12 hours
+                    if (id(time_edit_hour) < 12) {
+                      id(time_edit_hour) += 12;
+                    } else {
+                      id(time_edit_hour) -= 12;
+                    }
+                - script.execute: update_time_display
 
         # Bottom buttons: SET / CLEAR / BACK
         - button:
             id: btn_time_set
             x: 18
-            y: 154
+            y: 158
             width: 64
             height: 26
             styles: style_btn
@@ -2708,32 +2821,20 @@ lvgl:
             on_click:
               then:
                 - lambda: |-
-                    int h = lv_slider_get_value(id(slider_hour));
-                    int m = lv_slider_get_value(id(slider_minute));
+                    // Always store as 24hr "HH:MM" internally
                     char time_buf[8];
-                    snprintf(time_buf, sizeof(time_buf), "%02d:%02d", h, m);
-                    // Store locally
+                    snprintf(time_buf, sizeof(time_buf), "%02d:%02d", id(time_edit_hour), id(time_edit_minute));
                     std::string ts = time_buf;
                     int slot = id(time_edit_slot);
-                    if (slot == 1) id(sched_time_1) = ts;
-                    else if (slot == 2) id(sched_time_2) = ts;
-                    else if (slot == 3) id(sched_time_3) = ts;
-                    else if (slot == 4) id(sched_time_4) = ts;
-                - script.execute:
-                    id: send_schedule_time
-                    slot: !lambda 'return id(time_edit_slot);'
-                    time_str: !lambda |-
-                      int h = lv_slider_get_value(id(slider_hour));
-                      int m = lv_slider_get_value(id(slider_minute));
-                      char buf[8];
-                      snprintf(buf, sizeof(buf), "%02d:%02d", h, m);
-                      return std::string(buf);
-
+                    if (slot == 1) { id(sched_time_1) = ts; auto call = id(sched_time_1_entity).make_call(); call.set_value(ts); call.perform(); }
+                    else if (slot == 2) { id(sched_time_2) = ts; auto call = id(sched_time_2_entity).make_call(); call.set_value(ts); call.perform(); }
+                    else if (slot == 3) { id(sched_time_3) = ts; auto call = id(sched_time_3_entity).make_call(); call.set_value(ts); call.perform(); }
+                    else if (slot == 4) { id(sched_time_4) = ts; auto call = id(sched_time_4_entity).make_call(); call.set_value(ts); call.perform(); }
 
         - button:
             id: btn_time_clear
             x: 88
-            y: 154
+            y: 158
             width: 64
             height: 26
             styles: style_btn_red
@@ -2747,19 +2848,19 @@ lvgl:
               then:
                 - lambda: |-
                     int slot = id(time_edit_slot);
-                    if (slot == 1) id(sched_time_1) = "--:--";
-                    else if (slot == 2) id(sched_time_2) = "--:--";
-                    else if (slot == 3) id(sched_time_3) = "--:--";
-                    else if (slot == 4) id(sched_time_4) = "--:--";
-                - script.execute:
-                    id: send_schedule_time
-                    slot: !lambda 'return id(time_edit_slot);'
-                    time_str: ""
+                    std::string empty = "";
+                    if (slot == 1) { id(sched_time_1) = "--:--"; auto call = id(sched_time_1_entity).make_call(); call.set_value(empty); call.perform(); }
+                    else if (slot == 2) { id(sched_time_2) = "--:--"; auto call = id(sched_time_2_entity).make_call(); call.set_value(empty); call.perform(); }
+                    else if (slot == 3) { id(sched_time_3) = "--:--"; auto call = id(sched_time_3_entity).make_call(); call.set_value(empty); call.perform(); }
+                    else if (slot == 4) { id(sched_time_4) = "--:--"; auto call = id(sched_time_4_entity).make_call(); call.set_value(empty); call.perform(); }
+                    id(time_edit_hour) = 6;
+                    id(time_edit_minute) = 0;
+                - script.execute: update_time_display
 
         - button:
             id: btn_time_back
             x: 158
-            y: 154
+            y: 158
             width: 64
             height: 26
             styles: style_btn_outline
@@ -2775,7 +2876,7 @@ lvgl:
                     id: page_schedule
                     animation: NONE
 
-    # ──────── PAGE: SETTINGS ────────
+    # ──────── PAGE: SETTINGS (Simplified — no IP editor) ────────
     - id: page_settings
       bg_color: 0x0D0D0D
       bg_opa: COVER
@@ -2784,164 +2885,23 @@ lvgl:
           - lambda: |-
               if (id(enc_indev) != nullptr)
                 lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_settings));
-              // Update IP display
-              char o1[4], o2[4], o3[4], o4[4];
-              snprintf(o1, sizeof(o1), "%d", id(ip_octet_1));
-              snprintf(o2, sizeof(o2), "%d", id(ip_octet_2));
-              snprintf(o3, sizeof(o3), "%d", id(ip_octet_3));
-              snprintf(o4, sizeof(o4), "%d", id(ip_octet_4));
-              lv_label_set_text(id(lbl_ip_o1), o1);
-              lv_label_set_text(id(lbl_ip_o2), o2);
-              lv_label_set_text(id(lbl_ip_o3), o3);
-              lv_label_set_text(id(lbl_ip_o4), o4);
               lv_slider_set_value(id(slider_zone_count), id(zone_count), LV_ANIM_OFF);
               char zc[4];
               snprintf(zc, sizeof(zc), "%d", id(zone_count));
               lv_label_set_text(id(lbl_zone_count_val), zc);
+              // Update 12hr toggle label
+              if (id(use_12hour)) {
+                lv_label_set_text(id(lbl_12hr_toggle), "12 HR");
+              } else {
+                lv_label_set_text(id(lbl_12hr_toggle), "24 HR");
+              }
       widgets:
         - label:
             text: "SETTINGS"
             text_font: montserrat_12
             text_color: 0x888888
             align: TOP_MID
-            y: 18
-
-        - label:
-            text: "Controller IP:"
-            text_font: montserrat_10
-            text_color: 0x888888
-            align: TOP_MID
-            y: 36
-
-        # IP octet buttons
-        - button:
-            id: btn_ip_octet_1
-            x: 18
-            y: 52
-            width: 48
-            height: 26
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  id: lbl_ip_o1
-                  text: "192"
-                  text_font: montserrat_12
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - lambda: |-
-                    id(editing_octet) = 1;
-                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_1), LV_ANIM_OFF);
-                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 1");
-                    char buf[4];
-                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_1));
-                    lv_label_set_text(id(lbl_ip_edit_val), buf);
-                - lvgl.page.show:
-                    id: page_ip_edit
-                    animation: NONE
-
-        - label:
-            text: "."
-            text_font: montserrat_14
-            text_color: 0x888888
-            x: 69
-            y: 56
-
-        - button:
-            id: btn_ip_octet_2
-            x: 74
-            y: 52
-            width: 48
-            height: 26
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  id: lbl_ip_o2
-                  text: "168"
-                  text_font: montserrat_12
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - lambda: |-
-                    id(editing_octet) = 2;
-                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_2), LV_ANIM_OFF);
-                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 2");
-                    char buf[4];
-                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_2));
-                    lv_label_set_text(id(lbl_ip_edit_val), buf);
-                - lvgl.page.show:
-                    id: page_ip_edit
-                    animation: NONE
-
-        - label:
-            text: "."
-            text_font: montserrat_14
-            text_color: 0x888888
-            x: 125
-            y: 56
-
-        - button:
-            id: btn_ip_octet_3
-            x: 130
-            y: 52
-            width: 42
-            height: 26
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  id: lbl_ip_o3
-                  text: "1"
-                  text_font: montserrat_12
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - lambda: |-
-                    id(editing_octet) = 3;
-                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_3), LV_ANIM_OFF);
-                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 3");
-                    char buf[4];
-                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_3));
-                    lv_label_set_text(id(lbl_ip_edit_val), buf);
-                - lvgl.page.show:
-                    id: page_ip_edit
-                    animation: NONE
-
-        - label:
-            text: "."
-            text_font: montserrat_14
-            text_color: 0x888888
-            x: 175
-            y: 56
-
-        - button:
-            id: btn_ip_octet_4
-            x: 180
-            y: 52
-            width: 42
-            height: 26
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  id: lbl_ip_o4
-                  text: "100"
-                  text_font: montserrat_12
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - lambda: |-
-                    id(editing_octet) = 4;
-                    lv_slider_set_value(id(slider_ip_val), id(ip_octet_4), LV_ANIM_OFF);
-                    lv_label_set_text(id(lbl_ip_edit_title), "Octet 4");
-                    char buf[4];
-                    snprintf(buf, sizeof(buf), "%d", id(ip_octet_4));
-                    lv_label_set_text(id(lbl_ip_edit_val), buf);
-                - lvgl.page.show:
-                    id: page_ip_edit
-                    animation: NONE
+            y: 22
 
         # Zone count
         - label:
@@ -2949,12 +2909,12 @@ lvgl:
             text_font: montserrat_10
             text_color: 0x888888
             x: 30
-            y: 90
+            y: 48
 
         - slider:
             id: slider_zone_count
             x: 74
-            y: 92
+            y: 50
             width: 100
             height: 12
             min_value: 1
@@ -2980,13 +2940,13 @@ lvgl:
             text_font: montserrat_12
             text_color: 0x00E676
             x: 184
-            y: 88
+            y: 46
 
         # Auto detect button
         - button:
             id: btn_auto_detect
             align: TOP_MID
-            y: 112
+            y: 76
             width: 140
             height: 26
             styles: style_btn_outline
@@ -2998,7 +2958,32 @@ lvgl:
                   text_color: 0x00E676
             on_click:
               then:
-                - script.execute: auto_detect_zones
+                - button.press: auto_detect_entity
+
+        # 12/24 Hour toggle
+        - button:
+            id: btn_12hr_toggle
+            align: TOP_MID
+            y: 110
+            width: 140
+            height: 26
+            styles: style_btn_outline
+            widgets:
+              - label:
+                  id: lbl_12hr_toggle
+                  text: "12 HR"
+                  text_font: montserrat_10
+                  align: CENTER
+                  text_color: 0x00E676
+            on_click:
+              then:
+                - switch.toggle: use_12hour_entity
+                - lambda: |-
+                    if (id(use_12hour)) {
+                      lv_label_set_text(id(lbl_12hr_toggle), "12 HR");
+                    } else {
+                      lv_label_set_text(id(lbl_12hr_toggle), "24 HR");
+                    }
 
         # Save button
         - button:
@@ -3017,8 +3002,11 @@ lvgl:
             on_click:
               then:
                 - lambda: |-
-                    id(zone_count) = lv_slider_get_value(id(slider_zone_count));
-
+                    int zc = lv_slider_get_value(id(slider_zone_count));
+                    id(zone_count) = zc;
+                    auto call = id(zone_count_entity).make_call();
+                    call.set_value(zc);
+                    call.perform();
 
         # Back button
         - button:
@@ -3038,104 +3026,6 @@ lvgl:
               then:
                 - lvgl.page.show:
                     id: page_status
-                    animation: NONE
-
-    # ──────── PAGE: IP EDIT ────────
-    - id: page_ip_edit
-      bg_color: 0x0D0D0D
-      bg_opa: COVER
-      on_load:
-        then:
-          - lambda: |-
-              if (id(enc_indev) != nullptr)
-                lv_indev_set_group((lv_indev_t*)id(enc_indev), (lv_group_t*)id(grp_ip_edit));
-      widgets:
-        - label:
-            id: lbl_ip_edit_title
-            text: "Octet 1"
-            text_font: montserrat_14
-            text_color: 0x888888
-            align: TOP_MID
-            y: 30
-
-        - label:
-            id: lbl_ip_edit_val
-            text: "192"
-            text_font: montserrat_28
-            text_color: 0x00E676
-            align: CENTER
-            y: -20
-
-        - slider:
-            id: slider_ip_val
-            align: CENTER
-            y: 16
-            width: 160
-            height: 14
-            min_value: 0
-            max_value: 255
-            value: 192
-            bg_color: 0x1A1A1A
-            indicator:
-              bg_color: 0x00E676
-            knob:
-              bg_color: 0xFFFFFF
-              radius: 7
-              width: 14
-              height: 14
-            on_value:
-              then:
-                - lvgl.label.update:
-                    id: lbl_ip_edit_val
-                    text:
-                      format: "%d"
-                      args: ['(int)x']
-
-        - button:
-            id: btn_ip_edit_ok
-            align: BOTTOM_MID
-            x: -50
-            y: -30
-            width: 80
-            height: 30
-            styles: style_btn
-            widgets:
-              - label:
-                  text: "OK"
-                  text_font: montserrat_14
-                  align: CENTER
-                  text_color: 0x0D0D0D
-            on_click:
-              then:
-                - lambda: |-
-                    int val = lv_slider_get_value(id(slider_ip_val));
-                    int octet = id(editing_octet);
-                    if (octet == 1) id(ip_octet_1) = val;
-                    else if (octet == 2) id(ip_octet_2) = val;
-                    else if (octet == 3) id(ip_octet_3) = val;
-                    else if (octet == 4) id(ip_octet_4) = val;
-                - lvgl.page.show:
-                    id: page_settings
-                    animation: NONE
-
-        - button:
-            id: btn_ip_edit_cancel
-            align: BOTTOM_MID
-            x: 50
-            y: -30
-            width: 80
-            height: 30
-            styles: style_btn_outline
-            widgets:
-              - label:
-                  text: "CANCEL"
-                  text_font: montserrat_10
-                  align: CENTER
-                  text_color: 0x00E676
-            on_click:
-              then:
-                - lvgl.page.show:
-                    id: page_settings
                     animation: NONE
 
     # ──────── PAGE: ACTIVE ZONE (big display when zone running) ────────
