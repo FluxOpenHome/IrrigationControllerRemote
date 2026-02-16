@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.14.0 — Fix active zone page not showing after boot sync
+# v2.16.0 — Sticky delta correction, debounce zone popup (1.5s)
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.14.0"
+  software_version: "2.16.0"
 
 esphome:
   name: "${name}"
@@ -426,6 +426,12 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # Timestamp when zone_states first went non-zero (for debounce)
+  - id: zone_active_since
+    type: uint32_t
+    restore_value: no
+    initial_value: '0'
+
   # Screen sleep tracking
   - id: screen_sleeping
     type: bool
@@ -577,6 +583,12 @@ text_sensor:
     icon: "mdi:history"
     update_interval: never
 
+  - platform: template
+    name: "Used Delta Latency"
+    id: used_delta_latency_entity
+    icon: "mdi:swap-horizontal"
+    update_interval: never
+
 # ──────────────────────────────────────────────
 # Template Text Entities (writable from HA)
 # ──────────────────────────────────────────────
@@ -660,10 +672,10 @@ text:
             if (total_secs <= 0) return;
             // Only start countdown if not already running (first push starts it)
             if (!id(countdown_running)) {
-              // Apply last delta correction
-              std::string last_d = id(last_delta_latency_entity).state;
-              if (!last_d.empty() && last_d != "0") {
-                int correction = atoi(last_d.c_str());
+              // Apply used delta correction (sticky — only changes on non-zero delta)
+              std::string used_d = id(used_delta_latency_entity).state;
+              if (!used_d.empty() && used_d != "0") {
+                int correction = atoi(used_d.c_str());
                 total_secs -= correction;
                 if (total_secs < 0) total_secs = 0;
               }
@@ -792,11 +804,10 @@ number:
     set_action:
       - lambda: |-
           int secs = (int)x;
-          // Apply last delta correction: positive delta means zone stopped
-          // before countdown, so we shorten. Negative means zone ran longer.
-          std::string last_d = id(last_delta_latency_entity).state;
-          if (!last_d.empty() && last_d != "0") {
-            int correction = atoi(last_d.c_str());
+          // Apply used delta correction (sticky — only changes on non-zero delta)
+          std::string used_d = id(used_delta_latency_entity).state;
+          if (!used_d.empty() && used_d != "0") {
+            int correction = atoi(used_d.c_str());
             secs -= correction;
             if (secs < 0) secs = 0;
           }
@@ -1819,6 +1830,12 @@ script:
           }
           // Auto-show/hide active zone page based on zone states
           if (id(zone_states) != 0 && !id(zone_active_showing)) {
+            // Record when zones first became active (for debounce)
+            if (id(zone_active_since) == 0) {
+              id(zone_active_since) = millis();
+            }
+            // Wait 1.5s for zone states to settle before showing popup
+            if (millis() - id(zone_active_since) < 1500) return;
             // Find first active zone number for display
             for (int i = 0; i < 32; i++) {
               if ((id(zone_states) >> i) & 1) {
@@ -1834,8 +1851,10 @@ script:
               id(lcd_backlight).turn_on().set_brightness(1.0f).perform();
             }
             id(zone_active_showing) = true;
+            id(zone_active_since) = 0;
             lv_scr_load(id(page_active_zone)->obj);
           } else if (id(zone_states) == 0 && id(zone_active_showing)) {
+            id(zone_active_since) = 0;
             id(zone_active_showing) = false;
             lv_scr_load(id(page_status)->obj);
             // Capture delta: countdown_remaining at zone stop
@@ -1846,6 +1865,11 @@ script:
             snprintf(dbuf, sizeof(dbuf), "%d", delta);
             id(delta_latency_entity).publish_state(dbuf);
             id(last_delta_latency_entity).publish_state(dbuf);
+            // Only update used correction when delta != 0
+            // If delta is 0, current correction is working — keep it
+            if (delta != 0) {
+              id(used_delta_latency_entity).publish_state(dbuf);
+            }
             // Stop countdown and reset
             id(countdown_running) = false;
             id(countdown_remaining) = 0;
@@ -1964,10 +1988,31 @@ interval:
             }
           }
 
-  # Idle timeout: return to active zone page after 60s of no interaction
-  - interval: 5s
+  # Idle timeout + deferred active zone show
+  - interval: 2s
     then:
       - lambda: |-
+          // Deferred zone popup: if zones have been active for 1.5s+ but popup not shown yet
+          if (id(zone_states) != 0 && !id(zone_active_showing) && id(zone_active_since) != 0) {
+            if (millis() - id(zone_active_since) >= 1500) {
+              for (int i = 0; i < 32; i++) {
+                if ((id(zone_states) >> i) & 1) {
+                  char zn[4];
+                  snprintf(zn, sizeof(zn), "%d", i + 1);
+                  lv_label_set_text(id(lbl_big_zone), zn);
+                  break;
+                }
+              }
+              if (id(screen_sleeping)) {
+                id(screen_sleeping) = false;
+                id(lcd_backlight).turn_on().set_brightness(1.0f).perform();
+              }
+              id(zone_active_showing) = true;
+              id(zone_active_since) = 0;
+              lv_scr_load(id(page_active_zone)->obj);
+            }
+          }
+          // Return to active zone page after 60s idle
           std::string az = id(active_zone_entity).state;
           if (az != "--" && !az.empty() && !id(zone_active_showing)) {
             uint32_t idle_ms = lv_disp_get_inactive_time(NULL);
