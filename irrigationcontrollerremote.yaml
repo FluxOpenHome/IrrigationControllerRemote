@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.11.0 — Version on status page, removed from settings
+# v2.12.0 — Local countdown timer, delta latency tracking
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.11.0"
+  software_version: "2.12.0"
 
 esphome:
   name: "${name}"
@@ -426,6 +426,20 @@ globals:
     restore_value: no
     initial_value: 'false'
 
+  # Local countdown (seconds)
+  - id: countdown_remaining
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: countdown_total
+    type: int
+    restore_value: no
+    initial_value: '0'
+  - id: countdown_running
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
 # ──────────────────────────────────────────────
 # Sensors
 # ──────────────────────────────────────────────
@@ -545,6 +559,18 @@ text_sensor:
     ssid:
       name: "Connected SSID"
 
+  - platform: template
+    name: "Delta Latency"
+    id: delta_latency_entity
+    icon: "mdi:delta"
+    update_interval: never
+
+  - platform: template
+    name: "Last Delta Latency"
+    id: last_delta_latency_entity
+    icon: "mdi:history"
+    update_interval: never
+
 # ──────────────────────────────────────────────
 # Template Text Entities (writable from HA)
 # ──────────────────────────────────────────────
@@ -605,25 +631,6 @@ text:
     max_length: 16
     mode: text
     initial_value: "--"
-    on_value:
-      then:
-        - lambda: |-
-            lv_label_set_text(id(lbl_big_remaining), x.c_str());
-
-  - platform: template
-    name: "Progress"
-    id: progress_entity
-    icon: "mdi:progress-clock"
-    optimistic: true
-    min_length: 0
-    max_length: 8
-    mode: text
-    initial_value: "0"
-    on_value:
-      then:
-        - lambda: |-
-            int pct = atoi(x.c_str());
-            lv_bar_set_value(id(bar_active_progress), pct, LV_ANIM_ON);
 
   - platform: template
     name: "Active Zone"
@@ -718,6 +725,47 @@ number:
     set_action:
       - lambda: |-
           id(zone_count) = (int)x;
+
+  # Countdown: HA pushes total seconds once when zone starts, ESP counts down locally
+  - platform: template
+    name: "Countdown Seconds"
+    id: countdown_seconds_entity
+    icon: "mdi:timer-sand"
+    min_value: 0
+    max_value: 86400
+    step: 1
+    mode: box
+    optimistic: true
+    initial_value: 0
+    set_action:
+      - lambda: |-
+          int secs = (int)x;
+          // Apply last delta correction: positive delta means zone stopped
+          // before countdown, so we shorten. Negative means zone ran longer.
+          std::string last_d = id(last_delta_latency_entity).state;
+          if (!last_d.empty() && last_d != "0") {
+            int correction = atoi(last_d.c_str());
+            secs -= correction;
+            if (secs < 0) secs = 0;
+          }
+          id(countdown_total) = secs;
+          id(countdown_remaining) = secs;
+          id(countdown_running) = true;
+          // Immediately update the display
+          if (secs > 0) {
+            char buf[16];
+            int h = secs / 3600;
+            int m = (secs % 3600) / 60;
+            int s = secs % 60;
+            if (h > 0) {
+              snprintf(buf, sizeof(buf), "%d:%02d:%02d", h, m, s);
+            } else {
+              snprintf(buf, sizeof(buf), "%d:%02d", m, s);
+            }
+            lv_label_set_text(id(lbl_big_remaining), buf);
+            // Reset progress bar to full
+            lv_bar_set_value(id(bar_active_progress), 100, LV_ANIM_OFF);
+          }
 
   # Zone durations (1-32)
   - platform: template
@@ -1738,6 +1786,18 @@ script:
           } else if (id(zone_states) == 0 && id(zone_active_showing)) {
             id(zone_active_showing) = false;
             lv_scr_load(id(page_status)->obj);
+            // Capture delta: countdown_remaining at zone stop
+            // Positive = zone stopped early (shorten next time)
+            // Negative = zone ran past countdown (lengthen next time)
+            int delta = id(countdown_remaining);
+            char dbuf[16];
+            snprintf(dbuf, sizeof(dbuf), "%d", delta);
+            id(delta_latency_entity).publish_state(dbuf);
+            id(last_delta_latency_entity).publish_state(dbuf);
+            // Stop countdown and reset
+            id(countdown_running) = false;
+            id(countdown_remaining) = 0;
+            id(countdown_total) = 0;
           }
 
   # Helper: refresh schedule page
@@ -1823,6 +1883,33 @@ interval:
               snprintf(buf, sizeof(buf), "%02d:%02d", time.hour, time.minute);
             }
             lv_label_set_text(id(lbl_current_time), buf);
+          }
+          // Local countdown tick — keeps running past 0 to track overshoot
+          if (id(countdown_running)) {
+            id(countdown_remaining)--;
+            int r = id(countdown_remaining);
+            char cbuf[16];
+            if (r > 0) {
+              // Still counting down
+              int h = r / 3600;
+              int m = (r % 3600) / 60;
+              int s = r % 60;
+              if (h > 0) {
+                snprintf(cbuf, sizeof(cbuf), "%d:%02d:%02d", h, m, s);
+              } else {
+                snprintf(cbuf, sizeof(cbuf), "%d:%02d", m, s);
+              }
+              lv_label_set_text(id(lbl_big_remaining), cbuf);
+              int total = id(countdown_total);
+              if (total > 0) {
+                int pct = (r * 100) / total;
+                lv_bar_set_value(id(bar_active_progress), pct, LV_ANIM_ON);
+              }
+            } else {
+              // Past zero — zone is running longer than expected
+              lv_label_set_text(id(lbl_big_remaining), "0:00");
+              lv_bar_set_value(id(bar_active_progress), 0, LV_ANIM_OFF);
+            }
           }
 
   # Idle timeout: return to active zone page after 60s of no interaction
