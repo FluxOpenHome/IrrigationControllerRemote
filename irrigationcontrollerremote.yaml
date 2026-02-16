@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.2.0 — Logo, day text fix, time editor fix, active zone auto-show
+# v2.6.0 — Bigger logo on status page, moved up
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.5.0"
+  software_version: "2.6.0"
 
 esphome:
   name: "${name}"
@@ -256,7 +256,7 @@ light:
 image:
   - file: "logo_white_120.png"
     id: img_logo
-    resize: 100x32
+    resize: 130x42
     type: RGB565
     transparency: alpha_channel
 
@@ -1920,7 +1920,7 @@ lvgl:
         - image:
             src: img_logo
             align: CENTER
-            y: -54
+            y: -66
 
         # Current time from HA - big centered display
         - label:
@@ -1929,7 +1929,7 @@ lvgl:
             text_font: montserrat_28
             text_color: 0xFFFFFF
             align: CENTER
-            y: -16
+            y: -20
 
         # Valve status below time
         - label:
