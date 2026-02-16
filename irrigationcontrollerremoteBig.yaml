@@ -210,12 +210,6 @@ i2c:
     sda: GPIO16
     scl: GPIO15
 
-# SPI bus required by ST7701S for init sequence
-spi:
-  - id: spi_bus
-    clk_pin: GPIO48
-    mosi_pin: GPIO47
-
 output:
   - platform: ledc
     pin: GPIO38
