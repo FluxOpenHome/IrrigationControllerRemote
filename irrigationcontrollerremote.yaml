@@ -1,13 +1,13 @@
 # Irrigation Controller Remote - M5Stack Dial (StampS3)
 # Remote control for the FluxOpenHome Irrigation Controller
-# v2.7.0 — Screen sleep after 2 min idle, wake on dial/button/touch
+# v2.9.0 — Sync Needed switch (ALWAYS_ON), firmware version on settings page
 # All entities are optimistic templates. HA automations sync
 # bidirectionally between this remote and the controller.
 
 substitutions:
   name: "irrigation-remote"
   friendly_name: "Irrigation Remote"
-  software_version: "2.7.0"
+  software_version: "2.9.0"
 
 esphome:
   name: "${name}"
@@ -1205,6 +1205,13 @@ switch:
       - lambda: 'id(use_12hour) = true;'
     on_turn_off:
       - lambda: 'id(use_12hour) = false;'
+
+  - platform: template
+    name: "Sync Needed"
+    id: sync_needed_entity
+    icon: "mdi:sync-alert"
+    optimistic: true
+    restore_mode: ALWAYS_ON
 
   # Zone switches (1-32)
   - platform: template
@@ -3013,7 +3020,7 @@ lvgl:
                     id: page_time_edit
                     animation: NONE
 
-    # ──────── PAGE: SETTINGS (Simplified — just 12/24hr toggle) ────────
+    # ──────── PAGE: SETTINGS (12/24hr toggle + firmware version) ────────
     - id: page_settings
       bg_color: 0x0D0D0D
       bg_opa: COVER
@@ -3040,7 +3047,7 @@ lvgl:
         - button:
             id: btn_12hr_toggle
             align: CENTER
-            y: -10
+            y: -20
             width: 140
             height: 30
             styles: style_btn_outline
@@ -3065,7 +3072,7 @@ lvgl:
         - button:
             id: btn_settings_back
             align: CENTER
-            y: 40
+            y: 26
             width: 100
             height: 30
             styles: style_btn_outline
@@ -3080,6 +3087,14 @@ lvgl:
                 - lvgl.page.show:
                     id: page_status
                     animation: NONE
+
+        # Firmware version
+        - label:
+            text: "V${software_version}"
+            text_font: montserrat_12
+            text_color: 0x555555
+            align: BOTTOM_MID
+            y: -24
 
     # ──────── PAGE: ACTIVE ZONE (big display when zone running) ────────
     - id: page_active_zone
