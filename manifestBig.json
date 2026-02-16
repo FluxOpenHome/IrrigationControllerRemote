@@ -5,7 +5,7 @@
     {
       "chipFamily": "ESP32-S3",
       "ota": {
-        "md5": "baf853d9a2f3d4f90ba4e81ce5d786fb",
+        "md5": "918b70011ed55a985327579f48911392",
         "path": "https://github.com/FluxOpenHome/IrrigationControllerRemote/releases/download/v2.0.0/irrigation-remote-big-2.0.0.ota.bin",
         "release_url": "https://github.com/FluxOpenHome/IrrigationControllerRemote/releases/tag/v2.0.0",
         "summary": "Update 2.0.0"
