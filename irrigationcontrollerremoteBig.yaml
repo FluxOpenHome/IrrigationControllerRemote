@@ -208,7 +208,15 @@ web_server:
 i2c:
   - id: internal_i2c
     sda: GPIO16
-    scl: GPIO15
+    scl:
+      number: GPIO15
+      allow_other_uses: true
+
+# SPI bus required by ST7701S for init sequence (released after init)
+spi:
+  - id: spi_bus
+    clk_pin: GPIO1
+    mosi_pin: GPIO2
 
 output:
   - platform: ledc
@@ -221,6 +229,7 @@ display:
     id: dial_lcd
     auto_clear_enabled: false
     update_interval: never
+    color_order: RGB
     dimensions:
       width: 480
       height: 480
@@ -243,20 +252,27 @@ display:
         - GPIO12
         - GPIO13
         - GPIO14
-        - GPIO0
+        - number: GPIO0
+          allow_other_uses: true
+          ignore_strapping_warning: true
       green:
         - GPIO8
         - GPIO20
-        - GPIO3
-        - GPIO46
+        - number: GPIO3
+          ignore_strapping_warning: true
+        - number: GPIO46
+          ignore_strapping_warning: true
         - GPIO9
         - GPIO10
       blue:
         - GPIO4
-        - GPIO5
-        - GPIO6
+        - number: GPIO5
+          allow_other_uses: true
+        - number: GPIO6
+          allow_other_uses: true
         - GPIO7
-        - GPIO15
+        - number: GPIO15
+          allow_other_uses: true
     init_sequence:
       - 1
 
@@ -411,11 +427,13 @@ sensor:
       mode:
         input: true
         pullup: true
+      allow_other_uses: true
     pin_b:
       number: GPIO5
       mode:
         input: true
         pullup: true
+      allow_other_uses: true
 
   - platform: wifi_signal
     name: "WiFi Signal"
@@ -435,6 +453,8 @@ binary_sensor:
         input: true
         pullup: true
       inverted: true
+      allow_other_uses: true
+      ignore_strapping_warning: true
 
   - platform: template
     name: "WiFi Connected"
